@@ -1,0 +1,8 @@
+# Defensive ignore list for npm publish
+# (main allow-list is controlled via package.json "files")
+
+android/build/
+examples/
+docs/
+node_modules/
+*.tgz

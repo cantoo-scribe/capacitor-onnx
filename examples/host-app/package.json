@@ -1,0 +1,26 @@
+{
+  "name": "capacitor-onnx-host-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "cap:add:android": "cap add android",
+    "cap:sync": "cap sync android",
+    "android:assemble": "cd android && ./gradlew assembleDebug",
+    "pipeline:validate": "pnpm build && pnpm cap:sync && pnpm android:assemble"
+  },
+  "dependencies": {
+    "@cantoo/capacitor-onnx": "link:../..",
+    "@capacitor/core": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/cli": "^7.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.19"
+  }
+}

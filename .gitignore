@@ -1,0 +1,38 @@
+# macOS
+.DS_Store
+
+# Node / TypeScript
+node_modules/
+dist/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Android / Gradle
+.gradle/
+**/build/
+**/.cxx/
+**/captures/
+local.properties
+
+# Kotlin / Java
+*.class
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+
+# Misc
+coverage/
+.tmp/
+tmp/
+
+PLANS.md

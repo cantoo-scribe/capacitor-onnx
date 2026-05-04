@@ -1,0 +1,150 @@
+:root {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  color: #0f172a;
+  background: radial-gradient(circle at top right, #dbeafe, #f8fafc 40%, #e2e8f0);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 2rem 1rem 3rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(1.5rem, 2vw + 1rem, 2.5rem);
+}
+
+.subtitle {
+  margin: 0.5rem 0 1.5rem;
+  color: #334155;
+}
+
+.config {
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid #cbd5e1;
+  border-radius: 0.8rem;
+  padding: 0.9rem;
+  margin-bottom: 1.25rem;
+}
+
+.config h2 {
+  margin: 0 0 0.85rem;
+  font-size: 1.05rem;
+}
+
+.grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.preset-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.65rem;
+}
+
+.mock-row {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: end;
+}
+
+.preset-row label {
+  flex: 1;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+label.wide {
+  grid-column: 1 / -1;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  border: 1px solid #94a3b8;
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.65rem;
+  font: inherit;
+  color: #0f172a;
+  background: #f8fafc;
+}
+
+textarea {
+  resize: vertical;
+}
+
+.actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+}
+
+button {
+  border: 0;
+  border-radius: 0.6rem;
+  padding: 0.65rem 1rem;
+  background: #0f172a;
+  color: #f8fafc;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #1e293b;
+}
+
+button:disabled {
+  background: #64748b;
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+pre {
+  background: #020617;
+  color: #e2e8f0;
+  border-radius: 0.7rem;
+  padding: 1rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 200px;
+}
+
+@media (max-width: 720px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .preset-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .mock-row {
+    grid-template-columns: 1fr;
+  }
+
+  label.wide {
+    grid-column: auto;
+  }
+}

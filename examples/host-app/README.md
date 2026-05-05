@@ -65,9 +65,8 @@ pnpm pipeline:validate
 	- Lets you test inference without manually pasting thousands of samples.
 - **Run success E2E** button:
 	- Uses configuration fields (modelId, version, url, optional sha256, normalized input).
-	- Automatically converts input to tensor via the `getInputTensor(...)` helper.
-	- Runs the sequence `prepareModel -> warmupModel -> runInference`.
-	- Validates minimal contract assertions (`sessionReady`, `warmed`, `logits.type`, shape/data consistency, numeric latency).
+	- Runs the sequence `loadModel -> run`.
+	- Validates minimal contract assertions (`sessionReady`, `warmed`, `logits.type`, dims/data consistency, numeric latency).
 - **Run error E2E** button:
 	- Forces `runInference` with a missing model.
 	- Validates structured error contract (`code`, `message`, `retryable`, `correlationId`).
@@ -78,7 +77,7 @@ pnpm pipeline:validate
 
 ## Concurrent call protection
 
-- While `prepareModel` is running, action buttons are disabled.
+- While `loadModel` is running, action buttons are disabled.
 - Concurrent calls for the same model load wait for the first call (deduplication by model/version/url/hash key).
 
 ## Note about E2E success

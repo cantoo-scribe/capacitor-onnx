@@ -16,19 +16,22 @@ export interface PluginError {
   details?: Record<string, unknown>;
 }
 
-export interface PrepareModelInput {
+export interface LoadModelInput {
   modelId: string;
   version: string;
   url: string;
   sha256?: string;
+  warmup?: boolean;
   timeoutMs?: number;
   forceRedownload?: boolean;
   sessionOptions?: SessionOptionsInput;
 }
 
-export interface PrepareModelResult {
+export interface LoadModelResult {
   status: 'downloaded' | 'cache_hit';
   sessionReady: boolean;
+  warmed?: boolean;
+  warmupLatencyMs?: number;
   latencyMs: number;
   executionProviderUsed?: 'cpu' | 'nnapi';
 }
@@ -39,17 +42,7 @@ export interface SessionOptionsInput {
   interOpNumThreads?: number;
 }
 
-export interface WarmupModelInput {
-  modelId: string;
-  version: string;
-}
-
-export interface WarmupModelResult {
-  warmed: boolean;
-  latencyMs: number;
-}
-
-export interface RunInferenceInput {
+export interface RunInput {
   modelId: string;
   version: string;
   inputTensor: RawTensor;
@@ -57,32 +50,13 @@ export interface RunInferenceInput {
 
 export interface RawTensor {
   data: number[];
-  shape: number[];
-  type: 'float32';
+  dims?: readonly number[];
+  type: 'float32' | 'float16' | 'int32' | 'int64' | 'uint32' | 'uint8' | 'bool';
 }
 
-export interface RunInferenceResult {
+export interface RunResult {
   logits: RawTensor;
   latencyMs: number;
-}
-
-export interface InferFromAudioInput {
-  modelId: string;
-  version: string;
-  normalizedData: ArrayLike<number>;
-  shape?: number[];
-}
-
-export interface GetModelStatusInput {
-  modelId: string;
-  version: string;
-}
-
-export interface GetModelStatusResult {
-  exists: boolean;
-  integrityOk: boolean;
-  sessionLoaded: boolean;
-  sizeBytes?: number;
 }
 
 export interface ClearModelInput {
@@ -98,22 +72,9 @@ export interface ClearAllCacheResult {
   removedModels: number;
 }
 
-export interface DiagnosticsResult {
-  activeSessions: number;
-  cacheEntries: number;
-}
-
-export interface IsActiveResult {
-  value: boolean;
-}
-
 export interface CapacitorOnnxPlugin {
-  isActive(): Promise<IsActiveResult>;
-  prepareModel(input: PrepareModelInput): Promise<PrepareModelResult>;
-  warmupModel(input: WarmupModelInput): Promise<WarmupModelResult>;
-  runInference(input: RunInferenceInput): Promise<RunInferenceResult>;
-  getModelStatus(input: GetModelStatusInput): Promise<GetModelStatusResult>;
+  loadModel(input: LoadModelInput): Promise<LoadModelResult>;
+  run(input: RunInput): Promise<RunResult>;
   clearModel(input: ClearModelInput): Promise<ClearModelResult>;
   clearAllCache(): Promise<ClearAllCacheResult>;
-  getDiagnostics(): Promise<DiagnosticsResult>;
 }

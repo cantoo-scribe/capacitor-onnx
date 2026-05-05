@@ -1,7 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { CapacitorOnnx } from '@cantoo/capacitor-onnx';
 
-import type { PrepareModelResult, RunInferenceResult } from '@cantoo/capacitor-onnx';
+import type { LoadModelResult, RunResult } from '@cantoo/capacitor-onnx';
 
 import './style.css';
 
@@ -16,6 +16,11 @@ type InferenceSuccessConfig = {
   version: string;
   url: string;
   sha256?: string;
+};
+
+type RunInferenceConfig = {
+  modelId: string;
+  version: string;
   normalizedData: number[];
 };
 
@@ -36,7 +41,7 @@ type NormalizedPluginError = {
   raw: unknown;
 };
 
-const prepareModelInFlight = new Map<string, Promise<PrepareModelResult>>();
+const loadModelInFlight = new Map<string, Promise<LoadModelResult>>();
 let isModelLoading = false;
 
 function makeRampData(length: number): number[] {
@@ -135,8 +140,8 @@ app.innerHTML = `
       </div>
     </section>
     <section class="actions">
-      <button id="btn-diagnostics">Get diagnostics</button>
-      <button id="btn-success-e2e">Run success E2E</button>
+      <button id="btn-load-model">Load model</button>
+      <button id="btn-success-e2e">Run inference</button>
       <button id="btn-error-e2e">Run error E2E</button>
       <button id="btn-clear-model-cache">Clear model cache</button>
       <button id="btn-clear-all-cache">Clear all cache</button>
@@ -211,7 +216,7 @@ function validateNormalizedAudioLength(values: number[]) {
   }
 }
 
-function product(values: number[]): number {
+function product(values: readonly number[]): number {
   return values.reduce((acc, current) => acc * current, 1);
 }
 
@@ -316,25 +321,24 @@ function applyPreset(presetId: string) {
   fields.versionInput.value = preset.version;
   fields.normalizedInput.value = preset.tensorData.join(',');
 
-  writeOutput({
-    operation: 'apply-preset',
-    preset: preset.label,
-    note: 'Preset applied. Fill model URL and (optionally) SHA-256 to run success E2E.',
+    writeOutput({
+      operation: 'apply-preset',
+      preset: preset.label,
+      note: 'Preset applied. Fill model URL and (optionally) SHA-256, then click Load model and Run inference.',
   });
 }
 
-function getConfigFromForm(): InferenceSuccessConfig {
-  const { modelIdInput, versionInput, urlInput, shaInput, normalizedInput } = getFormFields();
+function getLoadConfigFromForm(): InferenceSuccessConfig {
+  const { modelIdInput, versionInput, urlInput, shaInput } = getFormFields();
 
   const modelId = modelIdInput.value.trim();
   const version = versionInput.value.trim();
   const url = urlInput.value.trim();
   const sha256Raw = shaInput.value.trim();
   const sha256 = sha256Raw.length > 0 ? sha256Raw : undefined;
-  const normalizedData = parseTensorData(normalizedInput.value);
-  validateNormalizedAudioLength(normalizedData);
+
   if (!modelId || !version || !url) {
-    throw new Error('modelId, version and url are required for success E2E');
+    throw new Error('modelId, version and url are required to load model');
   }
 
   return {
@@ -342,6 +346,24 @@ function getConfigFromForm(): InferenceSuccessConfig {
     version,
     url,
     sha256,
+  };
+}
+
+function getRunConfigFromForm(): RunInferenceConfig {
+  const { modelIdInput, versionInput, normalizedInput } = getFormFields();
+
+  const modelId = modelIdInput.value.trim();
+  const version = versionInput.value.trim();
+  const normalizedData = parseTensorData(normalizedInput.value);
+  validateNormalizedAudioLength(normalizedData);
+
+  if (!modelId || !version) {
+    throw new Error('modelId and version are required to run inference');
+  }
+
+  return {
+    modelId,
+    version,
     normalizedData,
   };
 }
@@ -350,7 +372,7 @@ function getModelLoadKey(config: InferenceSuccessConfig): string {
   return `${config.modelId}::${config.version}::${config.url}::${config.sha256 ?? ''}`;
 }
 
-const diagnosticsButton = document.querySelector<HTMLButtonElement>('#btn-diagnostics');
+const loadModelButton = document.querySelector<HTMLButtonElement>('#btn-load-model');
 const successE2EButton = document.querySelector<HTMLButtonElement>('#btn-success-e2e');
 const errorE2EButton = document.querySelector<HTMLButtonElement>('#btn-error-e2e');
 const clearModelCacheButton = document.querySelector<HTMLButtonElement>('#btn-clear-model-cache');
@@ -360,7 +382,7 @@ const applyPresetButton = document.querySelector<HTMLButtonElement>('#btn-apply-
 const generateMockAudioButton = document.querySelector<HTMLButtonElement>('#btn-generate-mock-audio');
 
 if (
-  !diagnosticsButton ||
+  !loadModelButton ||
   !successE2EButton ||
   !errorE2EButton ||
   !clearModelCacheButton ||
@@ -373,7 +395,7 @@ if (
 }
 
 const actionButtons = [
-  diagnosticsButton,
+  loadModelButton,
   successE2EButton,
   errorE2EButton,
   clearModelCacheButton,
@@ -393,15 +415,15 @@ function setModelLoading(loading: boolean) {
   setActionButtonsDisabled(loading);
 }
 
-async function ensureModelPrepared(config: InferenceSuccessConfig): Promise<PrepareModelResult> {
+async function ensureModelPrepared(config: InferenceSuccessConfig): Promise<LoadModelResult> {
   const key = getModelLoadKey(config);
-  const existing = prepareModelInFlight.get(key);
+  const existing = loadModelInFlight.get(key);
   if (existing) {
     return existing;
   }
 
   setModelLoading(true);
-  const preparePromise = CapacitorOnnx.prepareModel({
+  const preparePromise = CapacitorOnnx.loadModel({
     modelId: config.modelId,
     version: config.version,
     url: config.url,
@@ -409,11 +431,11 @@ async function ensureModelPrepared(config: InferenceSuccessConfig): Promise<Prep
     ...(config.sha256 ? { sha256: config.sha256 } : {}),
   });
 
-  prepareModelInFlight.set(key, preparePromise);
+  loadModelInFlight.set(key, preparePromise);
   try {
     return await preparePromise;
   } finally {
-    prepareModelInFlight.delete(key);
+    loadModelInFlight.delete(key);
     setModelLoading(false);
   }
 }
@@ -454,18 +476,32 @@ generateMockAudioButton.addEventListener('click', () => {
   }
 });
 
-diagnosticsButton.addEventListener('click', async () => {
+
+
+loadModelButton.addEventListener('click', async () => {
+  const startedAt = Date.now();
   try {
-    const diagnostics = await CapacitorOnnx.getDiagnostics();
+    if (isModelLoading) {
+      return;
+    }
+
+    const config = getLoadConfigFromForm();
+    const loadModel = await ensureModelPrepared(config);
+
     writeOutput({
       platform: Capacitor.getPlatform(),
-      diagnostics,
+      operation: 'load-model',
+      passed: loadModel.sessionReady === true,
+      durationMs: Date.now() - startedAt,
+      loadModel,
     });
   } catch (error) {
     writeOutput({
       platform: Capacitor.getPlatform(),
-      operation: 'getDiagnostics',
-      error,
+      operation: 'load-model',
+      passed: false,
+      durationMs: Date.now() - startedAt,
+      error: normalizePluginError(error),
     });
   }
 });
@@ -477,33 +513,20 @@ successE2EButton.addEventListener('click', async () => {
       return;
     }
 
-    const config = getConfigFromForm();
+    const config = getRunConfigFromForm();
 
-    const prepare = await ensureModelPrepared(config);
-
-    const warmup = await CapacitorOnnx.warmupModel({
+    const inference: RunResult = await CapacitorOnnx.run({
       modelId: config.modelId,
       version: config.version,
-    });
-
-    const inference: RunInferenceResult = await CapacitorOnnx.runInference({
-      modelId: config.modelId,
-      version: config.version,
-      inputTensor: CapacitorOnnx.getInputTensor(config.normalizedData),
+      inputTensor: {
+        data: config.normalizedData,
+        dims: [1, config.normalizedData.length],
+        type: 'float32',
+      }
     });
 
     const assertions: AssertionResult[] = [
-      assertion('prepareModel.sessionReady', prepare.sessionReady === true, prepare),
-      assertion('warmupModel.warmed', warmup.warmed === true, warmup),
       assertion('runInference.logits.type', inference.logits.type === 'float32', inference.logits.type),
-      assertion(
-        'runInference.logits.shape/data consistency',
-        product(inference.logits.shape) === inference.logits.data.length,
-        {
-          shape: inference.logits.shape,
-          dataLength: inference.logits.data.length,
-        },
-      ),
       assertion('runInference.latencyMs is numeric', Number.isFinite(inference.latencyMs), inference.latencyMs),
     ];
 
@@ -515,11 +538,9 @@ successE2EButton.addEventListener('click', async () => {
       passed: allPassed,
       durationMs: Date.now() - startedAt,
       assertions,
-      prepare,
-      warmup,
       inferenceSummary: {
         logitsType: inference.logits.type,
-        logitsShape: inference.logits.shape,
+        logitsDims: inference.logits.dims,
         logitsLength: inference.logits.data.length,
       },
     });
@@ -548,7 +569,8 @@ clearModelCacheButton.addEventListener('click', async () => {
       throw new Error('modelId and version are required to clear model cache');
     }
 
-    const result = await CapacitorOnnx.clearModel({
+    const clearModel = CapacitorOnnx.clear();
+    const result = await clearModel({
       modelId,
       version,
     });
@@ -573,7 +595,8 @@ clearAllCacheButton.addEventListener('click', async () => {
   }
 
   try {
-    const result = await CapacitorOnnx.clearAllCache();
+    const clearAllCache = CapacitorOnnx.clearAllCache();
+    const result = await clearAllCache();
     writeOutput({
       platform: Capacitor.getPlatform(),
       operation: 'clear-all-cache',
@@ -592,12 +615,12 @@ errorE2EButton.addEventListener('click', async () => {
   const startedAt = Date.now();
   try {
     // Intentionally invalid model/version to force plugin-side structured error contract.
-    await CapacitorOnnx.runInference({
+    await CapacitorOnnx.run({
       modelId: 'missing-model',
       version: '0.0.0',
       inputTensor: {
         data: [0, 0, 0, 0],
-        shape: [1, 1, 2, 2],
+        dims: [1, 4],
         type: 'float32',
       },
     });

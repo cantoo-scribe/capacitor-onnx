@@ -5,36 +5,18 @@ import type {
   ClearAllCacheResult,
   ClearModelInput,
   ClearModelResult,
-  DiagnosticsResult,
-  GetModelStatusInput,
-  GetModelStatusResult,
-  IsActiveResult,
-  PrepareModelInput,
-  PrepareModelResult,
-  RunInferenceInput,
-  RunInferenceResult,
-  WarmupModelInput,
-  WarmupModelResult,
+  LoadModelInput,
+  LoadModelResult,
+  RunInput,
+  RunResult
 } from './definitions';
 
 export class CapacitorOnnxWeb extends WebPlugin implements CapacitorOnnxPlugin {
-  async isActive(): Promise<IsActiveResult> {
-    return { value: false };
-  }
-
-  async prepareModel(_input: PrepareModelInput): Promise<PrepareModelResult> {
+  async loadModel(_input: LoadModelInput): Promise<LoadModelResult> {
     throw new Error('CapacitorOnnx is only available on Android in this version.');
   }
 
-  async warmupModel(_input: WarmupModelInput): Promise<WarmupModelResult> {
-    throw new Error('CapacitorOnnx is only available on Android in this version.');
-  }
-
-  async runInference(_input: RunInferenceInput): Promise<RunInferenceResult> {
-    throw new Error('CapacitorOnnx is only available on Android in this version.');
-  }
-
-  async getModelStatus(_input: GetModelStatusInput): Promise<GetModelStatusResult> {
+  async run(_input: RunInput): Promise<RunResult> {
     throw new Error('CapacitorOnnx is only available on Android in this version.');
   }
 
@@ -43,10 +25,6 @@ export class CapacitorOnnxWeb extends WebPlugin implements CapacitorOnnxPlugin {
   }
 
   async clearAllCache(): Promise<ClearAllCacheResult> {
-    throw new Error('CapacitorOnnx is only available on Android in this version.');
-  }
-
-  async getDiagnostics(): Promise<DiagnosticsResult> {
     throw new Error('CapacitorOnnx is only available on Android in this version.');
   }
 }

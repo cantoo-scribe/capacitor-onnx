@@ -16,7 +16,7 @@ data class ModelRef(
     val file: File,
 )
 
-data class PrepareModelResultInternal(
+data class LoadModelResultInternal(
     val modelRef: ModelRef,
     val cacheHit: Boolean,
 )
@@ -42,7 +42,7 @@ class ModelStore(
         url: String,
         sha256: String?,
         forceRedownload: Boolean,
-    ): PrepareModelResultInternal = withContext(Dispatchers.IO) {
+    ): LoadModelResultInternal = withContext(Dispatchers.IO) {
         val modelDir = File(rootDir, "$modelId/$version")
         val finalFile = File(modelDir, "model.onnx")
         val hashFile = File(modelDir, "sha256.txt")
@@ -50,7 +50,7 @@ class ModelStore(
 
         if (!forceRedownload && finalFile.exists()) {
             if (normalizedHash == null) {
-                return@withContext PrepareModelResultInternal(
+                return@withContext LoadModelResultInternal(
                     modelRef = ModelRef(modelId, version, null, finalFile),
                     cacheHit = true,
                 )
@@ -59,7 +59,7 @@ class ModelStore(
             if (hashFile.exists()) {
                 val cachedHash = hashFile.readText().trim()
                 if (cachedHash.equals(normalizedHash, ignoreCase = true) && verifySha256(finalFile, normalizedHash)) {
-                    return@withContext PrepareModelResultInternal(
+                    return@withContext LoadModelResultInternal(
                         modelRef = ModelRef(modelId, version, normalizedHash, finalFile),
                         cacheHit = true,
                     )
@@ -89,7 +89,7 @@ class ModelStore(
             hashFile.delete()
         }
 
-        PrepareModelResultInternal(
+        LoadModelResultInternal(
             modelRef = ModelRef(modelId, version, normalizedHash, finalFile),
             cacheHit = false,
         )

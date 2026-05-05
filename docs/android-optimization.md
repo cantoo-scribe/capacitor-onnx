@@ -7,7 +7,7 @@ This document defines a practical strategy to improve Android performance with O
 ### graphOptimizationLevel
 - Recommendation: use a high level in production (ORT_ENABLE_ALL), especially for reused sessions.
 - Advantage: operator fusion and graph simplification reduce inference latency.
-- Trade-off: session creation may become slower; this is usually acceptable when the session is created in prepareModel and reused in later inferences.
+- Trade-off: session creation may become slower; this is usually acceptable when the session is created in loadModel and reused in later inferences.
 
 ### intraOpNumThreads
 - Defines parallelism within an operator.
@@ -153,7 +153,7 @@ Run per device and per model:
 ## Safe recommendation for production
 
 1. Production default: auto mode with safe CPU fallback.
-2. Session created once in prepareModel and reused by modelId+version; never recreate per inference.
+2. Session created once in loadModel and reused by modelId+version; never recreate per inference.
 3. Execution off the main thread (already aligned with the current plugin).
 4. Start with:
    - graphOptimizationLevel alto
@@ -171,11 +171,11 @@ Run per device and per model:
 - Evaluate execution providers available in the Android artifact.
 - Consider NNAPI as the main hardware acceleration path.
 - Implement safe CPU fallback.
-- Create session in prepareModel and reuse it for all inferences of the same modelId+version.
+- Create session in loadModel and reuse it for all inferences of the same modelId+version.
 - Run inference off the main thread.
 
 ## Current plugin state
 
-- Current flow: prepareModel already handles file download/cache and initializes the ONNX session.
+- Current flow: loadModel already handles file download/cache and initializes the ONNX session.
 - Current reuse: classifyImage reuses the same session by modelId+version (without recreating per call).
 - Practical implication: initialization cost is concentrated in prepare/warmup, and inference stays focused on session run.

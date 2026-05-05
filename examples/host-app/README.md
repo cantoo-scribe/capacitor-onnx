@@ -1,17 +1,17 @@
 # Host App (Smoke Test)
 
-Host app minimo para validar integracao do plugin `@cantoo/capacitor-onnx` com Android em ambiente real.
+Minimal host app to validate integration of the `@cantoo/capacitor-onnx` plugin with Android in a real environment.
 
-## Pre-requisitos
+## Prerequisites
 
 - Node.js 18+
 - pnpm 10+
 - JDK 21
 - Android SDK configurado
 
-## Fluxo rapido
+## Quick flow
 
-1. Instalar dependencias:
+1. Install dependencies:
 
 ```bash
 pnpm install
@@ -23,13 +23,13 @@ pnpm install
 pnpm build
 ```
 
-3. Adicionar Android (uma vez):
+3. Add Android (once):
 
 ```bash
 pnpm cap:add:android
 ```
 
-4. Sincronizar plugin/assets:
+4. Sync plugin/assets:
 
 ```bash
 pnpm cap:sync
@@ -41,46 +41,46 @@ pnpm cap:sync
 pnpm android:assemble
 ```
 
-6. Pipeline completa (apos Android existir):
+6. Full pipeline (after Android exists):
 
 ```bash
 pnpm pipeline:validate
 ```
 
-## Troubleshooting rapido
+## Quick troubleshooting
 
-- Falha de build Android por SDK/NDK ausente:
-	- Verifique variaveis de ambiente e configuracao do Android SDK no host.
-	- Rode `pnpm cap:sync` novamente apos ajustar o ambiente.
+- Android build failure due to missing SDK/NDK:
+	- Check environment variables and Android SDK configuration on the host.
+	- Run `pnpm cap:sync` again after fixing the environment.
 
-## Smoke test funcional
+## Functional smoke test
 
-- Botao **Get diagnostics**: valida bridge com chamada simples.
-- Campo **Quick preset** + botao **Apply preset**:
-	- Preenche rapidamente `modelId`, `version` e `normalized input`.
-	- Mantem `url` e `sha256` (opcional) para voce informar os valores do modelo.
-	- Inclui presets curtos e longos de audio para acelerar testes manuais de inferencia.
-- Botao **Generate mock audio**:
-	- Gera sinal de audio sintetico (senoidal com harmonico) e preenche automaticamente o campo `Normalized input (CSV)`.
-	- Permite testar inferencia sem colar manualmente milhares de amostras.
-- Botao **Run success E2E**:
-	- Usa os campos de configuracao (modelId, version, url, sha256 opcional, normalized input).
-	- Converte automaticamente a entrada para tensor via helper `getInputTensor(...)`.
-	- Executa sequencia `prepareModel -> warmupModel -> runInference`.
-	- Valida assertions minimas de contrato (`sessionReady`, `warmed`, `logits.type`, consistencia shape/data, latencia numerica).
-- Botao **Run error E2E**:
-	- Forca `runInference` com modelo ausente.
-	- Valida contrato de erro estruturado (`code`, `message`, `retryable`, `correlationId`).
-- Botao **Clear model cache**:
-	- Limpa cache do modelo atual (`modelId` + `version`) no dispositivo.
-- Botao **Clear all cache**:
-	- Limpa todos os modelos preparados no dispositivo.
+- **Get diagnostics** button: validates the bridge with a simple call.
+- **Quick preset** field + **Apply preset** button:
+	- Quickly fills `modelId`, `version`, and `normalized input`.
+	- Keeps `url` and `sha256` (optional) for you to provide model values.
+	- Includes short and long audio presets to speed up manual inference tests.
+- **Generate mock audio** button:
+	- Generates a synthetic audio signal (sine wave with harmonic) and automatically fills the `Normalized input (CSV)` field.
+	- Lets you test inference without manually pasting thousands of samples.
+- **Run success E2E** button:
+	- Uses configuration fields (modelId, version, url, optional sha256, normalized input).
+	- Automatically converts input to tensor via the `getInputTensor(...)` helper.
+	- Runs the sequence `prepareModel -> warmupModel -> runInference`.
+	- Validates minimal contract assertions (`sessionReady`, `warmed`, `logits.type`, shape/data consistency, numeric latency).
+- **Run error E2E** button:
+	- Forces `runInference` with a missing model.
+	- Validates structured error contract (`code`, `message`, `retryable`, `correlationId`).
+- **Clear model cache** button:
+	- Clears the current model cache (`modelId` + `version`) on device.
+- **Clear all cache** button:
+	- Clears all prepared models on device.
 
-## Protecao de chamadas concorrentes
+## Concurrent call protection
 
-- Enquanto `prepareModel` esta executando, os botoes de acao ficam bloqueados.
-- Chamadas concorrentes para o mesmo carregamento de modelo aguardam a primeira (deduplicacao por chave de modelo/versao/url/hash).
+- While `prepareModel` is running, action buttons are disabled.
+- Concurrent calls for the same model load wait for the first call (deduplication by model/version/url/hash key).
 
-## Observacao sobre sucesso E2E
+## Note about E2E success
 
-Para o fluxo de sucesso, e necessario informar um `url` real de um modelo ONNX compativel com o tensor de entrada configurado. O `sha256` pode ser omitido temporariamente.
+For the success flow, you must provide a real `url` to an ONNX model compatible with the configured input tensor. `sha256` can be temporarily omitted.

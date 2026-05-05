@@ -7,17 +7,10 @@
 
 Run:
 
+```bash
 npm login
 npm whoami
-
-## First publish
-
-For a scoped package, publish with --access public.
-
-pnpm build
-pnpm typecheck
-pnpm pack --dry-run
-npm publish --access public
+```
 
 ## Next releases
 
@@ -25,11 +18,13 @@ npm publish --access public
 2. Rebuild and validate.
 3. Publish.
 
+```bash
 npm version patch
 pnpm build
 pnpm typecheck
 pnpm pack --dry-run
 npm publish
+```
 
 Use npm version minor or npm version major when appropriate.
 
@@ -37,5 +32,7 @@ Use npm version minor or npm version major when appropriate.
 
 After publishing a new version, app repositories should update and resync native platforms:
 
+```bash
 pnpm add @cantoo/capacitor-onnx@latest
 pnpm cap sync android
+```

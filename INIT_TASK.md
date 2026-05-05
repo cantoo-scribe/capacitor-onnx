@@ -1,24 +1,24 @@
-# Execucação de tarefa
+# Task Execution
 
-## Antes de codificar
-- caso necessário, sobrescreva `PLANS.md` com um novo plano, não acumule múltiplos planos no mesmo arquivo
-- mantenha o plano pequeno, simples e baseado em passos claros
-- confirme e mantenha o foco no escopo definido
+## Before coding
+- if needed, overwrite `PLANS.md` with a new plan; do not accumulate multiple plans in the same file
+- keep the plan small, simple, and based on clear steps
+- confirm and stay focused on the defined scope
 
-## Durante a codificação
-- mantenha as alterações simples, focadas e mínimas
-- siga os padrões existentes (não introduza novos padrões sem necessidade)
-- reutilize utilitários e abstrações existentes
-- não duplique lógica
-- não modifique código que não seja necessário para a tarefa
+## During coding
+- keep changes simple, focused, and minimal
+- follow existing patterns (do not introduce new patterns unless necessary)
+- reuse existing utilities and abstractions
+- do not duplicate logic
+- do not modify code that is not required for the task
 
-## Depois de codificar
-- valide os tipos e lint
-- garanta funcionamento da feature end-to-end
-- atualize o progresso de `PLANS.md` 
+## After coding
+- validate types and lint
+- ensure the feature works end-to-end
+- update progress in `PLANS.md`
 
-## Se aplicável
+## If applicable
 
-- Crie ou atualize `AGENTS.md` se a tarefa envolver agentes
-- Atualize `docs/decisions.md` com as decisões de arquitetura tomadas
-- Atualize testes se o comportamento esperado mudou
+- Create or update `AGENTS.md` if the task involves agents
+- Update `docs/decisions.md` with the architectural decisions made
+- Update tests if expected behavior changed

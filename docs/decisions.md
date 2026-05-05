@@ -16,61 +16,61 @@
 - Consequence: Slightly more IO steps but robust consistency.
 
 ## 2026-05-04 - Native image inference pipeline in V1
-- Decision: Implement image inference in Android (URI/path decode, resize, RGB normalization to NCHW, ONNX run), sem decodificação de logits no plugin.
+- Decision: Implement image inference in Android (URI/path decode, resize, RGB normalization to NCHW, ONNX run), without logits decoding in the plugin.
 - Rationale: Keep bridge payloads small and avoid Float32 tensor transfers between JS and Kotlin.
-- Consequence: Plugin retorna apenas logits brutos (data/shape/type); labels, topK, argmax e demais regras de negócio ficam na aplicação.
+- Consequence: The plugin returns raw logits only (data/shape/type); labels, topK, argmax, and other business rules remain in the application.
 
 ## 2026-05-04 - Raw logits as plugin contract
-- Decision: O contrato de inferência exposto ao JS retorna exclusivamente logits puros.
-- Rationale: Separar engine de inferência (plugin) da lógica de interpretação de saída (aplicação), reduzindo acoplamento e facilitando evolução por modelo.
-- Consequence: O app consumidor deve implementar o pós-processamento adequado para cada modelo.
+- Decision: The inference contract exposed to JS returns raw logits only.
+- Rationale: Separate the inference engine (plugin) from output interpretation logic (application), reducing coupling and easing model-specific evolution.
+- Consequence: The consumer app must implement appropriate post-processing for each model.
 
 ## 2026-05-04 - Raw tensor input as plugin contract
-- Decision: O plugin recebe tensor de entrada já pré-processado (`inputTensor`) em vez de URI de imagem.
-- Rationale: Remover pré-processamento específico de domínio do plugin e manter a camada nativa focada em execução ONNX.
-- Consequence: A aplicação cliente passa a ser responsável por decode/resize/normalização e por garantir shape/tipo compatíveis com o modelo.
+- Decision: The plugin receives a preprocessed input tensor (`inputTensor`) instead of an image URI.
+- Rationale: Remove domain-specific preprocessing from the plugin and keep the native layer focused on ONNX execution.
+- Consequence: The client application becomes responsible for decode/resize/normalization and for guaranteeing shape/type compatibility with the model.
 
 ## 2026-05-04 - Structured error envelope for JS
-- Decision: Padronizar todas as falhas expostas pela bridge com envelope estruturado (`code`, `message`, `retryable`, `correlationId`, `details`).
-- Rationale: Facilitar tratamento consistente de erro no app, observabilidade e políticas de retry por categoria.
-- Consequence: Mensagens de erro internas continuam úteis para diagnóstico, mas o contrato oficial de consumo passa a depender prioritariamente de `code`.
+- Decision: Standardize all failures exposed by the bridge with a structured envelope (`code`, `message`, `retryable`, `correlationId`, `details`).
+- Rationale: Enable consistent error handling in the app, observability, and category-based retry policies.
+- Consequence: Internal error messages remain useful for diagnostics, but the official consumption contract depends primarily on `code`.
 
 ## 2026-05-04 - Temporary optional SHA-256 in prepareModel
-- Decision: Tornar `sha256` opcional temporariamente em `prepareModel` e pular verificação de integridade quando ausente.
-- Rationale: Os modelos atuais ainda não possuem metadata JSON com hash confiável para todos os artefatos.
-- Consequence: Mantém velocidade de integração no curto prazo, com menor garantia de integridade até a metadata ser disponibilizada.
+- Decision: Make `sha256` temporarily optional in `prepareModel` and skip integrity validation when it is absent.
+- Rationale: Current models do not yet provide JSON metadata with reliable hashes for all artifacts.
+- Consequence: Preserves short-term integration speed with lower integrity guarantees until metadata is available.
 
 ## 2026-05-04 - High-level TS helper for tensor ergonomics
-- Decision: Manter o contrato nativo baseado em `inputTensor` no plugin e adicionar helper de conveniência no SDK TS (`getInputTensor(...)`) para construir tensor automaticamente a partir de entrada normalizada.
-- Rationale: Preservar baixo acoplamento e foco do plugin em execução ONNX, sem perder ergonomia para uso equivalente ao fluxo atual com onnxruntime-web.
-- Consequence: O app consumidor pode operar em nível alto (dados normalizados) enquanto o contrato de bridge continua explícito, estável e compatível com diferentes domínios (audio, vision, etc.).
+- Decision: Keep the native contract based on `inputTensor` in the plugin and add a convenience helper in the TS SDK (`getInputTensor(...)`) to build tensors automatically from normalized input.
+- Rationale: Preserve low coupling and keep the plugin focused on ONNX execution without losing ergonomics for usage equivalent to the current onnxruntime-web flow.
+- Consequence: The consumer app can operate at a high level (normalized data) while the bridge contract remains explicit, stable, and compatible with different domains (audio, vision, etc.).
 
 ## 2026-05-04 - Android runtime optimization strategy
-- Decision: Adotar configuração de execução flexível (`cpu`, `nnapi`, `auto`) com fallback seguro para CPU, sessões reutilizadas e telemetria por etapa (download, criação de sessão, pré, inferência, pós).
-- Rationale: Maximizar performance sem comprometer estabilidade diante da heterogeneidade de drivers/providers no Android.
-- Consequence: O app ganha aceleração por hardware quando viável (NNAPI), mantendo previsibilidade operacional com fallback controlado e benchmark contínuo por dispositivo.
+- Decision: Adopt flexible execution configuration (`cpu`, `nnapi`, `auto`) with safe CPU fallback, reused sessions, and per-stage telemetry (download, session creation, pre, inference, post).
+- Rationale: Maximize performance without compromising stability given Android driver/provider heterogeneity.
+- Consequence: The app gets hardware acceleration when feasible (NNAPI), while keeping operational predictability through controlled fallback and continuous per-device benchmarking.
 
 ## 2026-05-04 - Session options exposed in prepareModel
-- Decision: Expor `sessionOptions` no `prepareModel` com `executionProvider` (`cpu`/`nnapi`/`auto`) e knobs simples de threads (`intraOpNumThreads`, `interOpNumThreads`).
-- Rationale: Permitir ajuste de performance sem aumentar complexidade da API de inferência.
-- Consequence: A sessão continua sendo criada uma vez e reutilizada por `modelId+version`, com fallback automático para CPU no modo `auto`.
+- Decision: Expose `sessionOptions` in `prepareModel` with `executionProvider` (`cpu`/`nnapi`/`auto`) and simple thread knobs (`intraOpNumThreads`, `interOpNumThreads`).
+- Rationale: Allow performance tuning without increasing inference API complexity.
+- Consequence: The session continues to be created once and reused by `modelId+version`, with automatic CPU fallback in `auto` mode.
 
 ## 2026-05-05 - Package export strategy as ESM-only
-- Decision: Publicar o SDK como ESM-only com `type: module` e `exports` explícito para o entrypoint principal.
-- Rationale: O build atual já é ESM, o ecossistema alvo (Capacitor + Vite) é ESM-first e isso reduz complexidade operacional versus dual build (CJS + ESM).
-- Consequence: Consumidores devem usar `import` (não `require`), e a superfície pública do pacote passa a ser controlada por `exports`.
+- Decision: Publish the SDK as ESM-only with `type: module` and explicit `exports` for the main entrypoint.
+- Rationale: The current build is already ESM, the target ecosystem (Capacitor + Vite) is ESM-first, and this reduces operational complexity versus a dual build (CJS + ESM).
+- Consequence: Consumers must use `import` (not `require`), and the package's public surface is controlled by `exports`.
 
 ## 2026-05-05 - Host/iFrame postMessage bridge in SDK
-- Decision: Expor utilitários TS para comunicação entre Host e iFrame (`createHostBridge` e `createIFrameBridge`) com envelope de mensagem padronizado por canal.
-- Rationale: Atender integração web com contrato mínimo, tipado e reutilizável, sem acoplamento ao runtime nativo.
-- Consequence: Apps Host e iFrame conseguem emitir/reagir a eventos via API comum, com filtros de origem (`targetOrigin`/`allowedOrigins`) para segurança básica.
+- Decision: Expose TS utilities for Host and iFrame communication (`createHostBridge` and `createIFrameBridge`) with a channel-standardized message envelope.
+- Rationale: Support web integration with a minimal, typed, reusable contract without coupling to native runtime.
+- Consequence: Host and iFrame apps can emit/react to events through a common API, with origin filters (`targetOrigin`/`allowedOrigins`) for basic security.
 
 ## 2026-05-05 - Async request protocol for Host/iFrame operations
-- Decision: Padronizar as operações de bridge em protocolo assíncrono com `requestId` e ciclo `requested/result/error`, implementado por classes (`OnnxIFrameClient` e `OnnxHostDispatcher`).
-- Rationale: Garantir semântica consistente de request/response para métodos críticos (`isActive`, `prepareModel`, `warmupModel`, `classifyImage`) e permitir API baseada em Promise no iFrame.
-- Consequence: O iFrame passa a aguardar resultado de forma determinística, e o Host centraliza despacho para nativo com chaves de evento estáveis.
+- Decision: Standardize bridge operations with an asynchronous protocol using `requestId` and a `requested/result/error` lifecycle, implemented by classes (`OnnxIFrameClient` and `OnnxHostDispatcher`).
+- Rationale: Ensure consistent request/response semantics for critical methods (`isActive`, `prepareModel`, `warmupModel`, `classifyImage`) and allow a Promise-based API in the iFrame.
+- Consequence: The iFrame waits for results deterministically, and the Host centralizes native dispatch with stable event keys.
 
 ## 2026-05-05 - RunInference-only audio-first contract
-- Decision: Remover `classifyImage` da API pública e adotar `runInference` como único método de inferência no SDK, bridge Host/iFrame e plugin Android.
-- Rationale: O domínio principal do produto é áudio, e nomenclatura orientada a imagem gerava ambiguidade de contrato.
-- Consequence: Consumidores devem migrar chamadas para `runInference`; o contrato fica semântico para áudio e permanece neutro para outros domínios baseados em tensor.
+- Decision: Remove `classifyImage` from the public API and adopt `runInference` as the only inference method in the SDK, Host/iFrame bridge, and Android plugin.
+- Rationale: The product's primary domain is audio, and image-oriented naming created contract ambiguity.
+- Consequence: Consumers must migrate calls to `runInference`; the contract becomes audio-semantic while remaining neutral for other tensor-based domains.

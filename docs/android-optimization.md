@@ -1,178 +1,181 @@
-# 10. Otimizacao e aceleracao por hardware (Android)
+# 10. Optimization and Hardware Acceleration (Android)
 
-Este documento define uma estrategia pratica para melhorar performance no Android com ONNX Runtime, equilibrando latencia, estabilidade e compatibilidade por dispositivo.
+This document defines a practical strategy to improve Android performance with ONNX Runtime, balancing latency, stability, and per-device compatibility.
 
 ## 1) ONNX Runtime SessionOptions
 
 ### graphOptimizationLevel
-- Recomendacao: usar nivel alto em producao (ORT_ENABLE_ALL), especialmente para sessao reutilizada.
-- Vantagem: fusao de operadores e simplificacao do grafo reduzem latencia de inferencia.
-- Trade-off: criacao da sessao pode ficar mais lenta; impacto geralmente aceitavel quando a sessao e criada no prepareModel e reutilizada nas inferencias seguintes.
+- Recommendation: use a high level in production (ORT_ENABLE_ALL), especially for reused sessions.
+- Advantage: operator fusion and graph simplification reduce inference latency.
+- Trade-off: session creation may become slower; this is usually acceptable when the session is created in prepareModel and reused in later inferences.
 
 ### intraOpNumThreads
-- Define paralelismo dentro de um operador.
-- Recomendacao inicial:
+- Defines parallelism within an operator.
+- Initial recommendation:
   - Low-end: 1-2
   - Mid/high-end: 2-4
-- Trade-off: mais threads pode melhorar throughput, mas piorar tail latency (p95) e aumentar consumo termico/bateria.
+- Trade-off: more threads can improve throughput, but may worsen tail latency (p95) and increase thermal/battery usage.
 
 ### interOpNumThreads
-- Define paralelismo entre operadores.
-- Recomendacao inicial: 1 para a maioria dos modelos mobile (grafos menores).
-- Trade-off: valores maiores podem causar overhead em modelos pequenos.
+- Defines parallelism between operators.
+- Initial recommendation: 1 for most mobile models (smaller graphs).
+- Trade-off: higher values may add overhead for small models.
 
 ### executionMode
-- ORT_SEQUENTIAL: geralmente melhor para inferencia single-request em mobile.
-- ORT_PARALLEL: pode ajudar em modelos maiores com grafo paralelo real.
-- Recomendacao: comecar com ORT_SEQUENTIAL e validar em benchmark por device.
+- ORT_SEQUENTIAL: generally better for single-request inference on mobile.
+- ORT_PARALLEL: can help for larger models with real graph parallelism.
+- Recommendation: start with ORT_SEQUENTIAL and validate with per-device benchmarks.
 
 ### memory pattern
-- Recomendacao: habilitar para entradas com shape estavel.
-- Trade-off: melhor performance em inferencias repetidas; menos ganho com shapes dinamicos.
+- Recommendation: enable for inputs with stable shapes.
+- Trade-off: better performance for repeated inferences; less gain with dynamic shapes.
 
 ### CPU arena allocator
-- Recomendacao: manter habilitado por padrao para reduzir overhead de alocacao.
-- Trade-off: pode aumentar uso de memoria residente em alguns cenarios.
+- Recommendation: keep enabled by default to reduce allocation overhead.
+- Trade-off: may increase resident memory usage in some scenarios.
 
-## 2) Execution Providers no Android
+## 2) Execution Providers on Android
 
 ### CPUExecutionProvider
 - Disponibilidade: sempre presente.
-- Papel: baseline confiavel e fallback universal.
-- Quando usar: modo seguro, compatibilidade maxima, debug.
+- Availability: always present.
+- Role: reliable baseline and universal fallback.
+- When to use: safe mode, maximum compatibility, debugging.
 
 ### NNAPIExecutionProvider
-- Disponibilidade: depende de Android version + driver/vendor.
-- Papel: principal caminho de aceleracao por hardware (NPU/DSP/GPU via NNAPI).
-- Trade-off: ganhos variam muito entre fabricantes e operacoes suportadas.
+- Availability: depends on Android version + driver/vendor.
+- Role: main hardware acceleration path (NPU/DSP/GPU through NNAPI).
+- Trade-off: gains vary widely across manufacturers and supported operations.
 
-### XNNPACKExecutionProvider (se aplicavel)
-- Em Android, o caminho mais comum e ORT CPU EP com otimizacoes internas; XNNPACK depende de build/distribuicao especifica.
-- Recomendacao: tratar como opcional e validar no artefato real (AAR) antes de expor como modo publico.
+### XNNPACKExecutionProvider (if applicable)
+### XNNPACKExecutionProvider (if applicable)
+- On Android, the most common path is ORT CPU EP with internal optimizations; XNNPACK depends on specific build/distribution.
+- Recommendation: treat as optional and validate in the real artifact (AAR) before exposing as a public mode.
 
-### QNNExecutionProvider (se aplicavel)
-- Focado em hardware Qualcomm com stack especifica.
-- Recomendacao: considerar apenas em distribuicao dedicada por fabricante/parque controlado.
-- Trade-off: maior complexidade operacional e matriz de compatibilidade.
+### QNNExecutionProvider (if applicable)
+### QNNExecutionProvider (if applicable)
+- Focused on Qualcomm hardware with a specific stack.
+- Recommendation: consider only for dedicated distribution by manufacturer/controlled device fleet.
+- Trade-off: higher operational complexity and compatibility matrix overhead.
 
-## 3) GPU / NPU no Android: viabilidade real
+## 3) GPU / NPU on Android: practical viability
 
-- Suporte GPU direto no Android via ONNX Runtime nao e o caminho mais portavel para app de mercado amplo.
-- Caminho principal realista: NNAPI, que tenta mapear para aceleradores do dispositivo.
-- Limitacao importante: nem todo modelo/op roda em NNAPI.
-- Comportamento esperado: quando op nao suportado, ocorre fallback parcial/total para CPU.
-- Impacto pratico: pode haver ganho alto em alguns devices e quase nenhum (ou regressao) em outros.
-- Compatibilidade por fabricante:
-  - Qualcomm recentes: tendencia a ganhos melhores em modelos compatveis.
-  - Exynos/MediaTek/variantes: comportamento mais heterogeneo.
-  - Devices antigos: fallback para CPU frequentemente dominante.
+- Direct GPU support on Android through ONNX Runtime is not the most portable path for broad-market apps.
+- Main realistic path: NNAPI, which tries to map workloads to device accelerators.
+- Important limitation: not every model/op runs on NNAPI.
+- Expected behavior: when an op is unsupported, partial or total fallback to CPU occurs.
+- Practical impact: some devices may get large gains, while others may get little gain (or regressions).
+- Manufacturer compatibility:
+  - Recent Qualcomm: trend toward better gains on compatible models.
+  - Exynos/MediaTek/variants: more heterogeneous behavior.
+  - Older devices: CPU fallback is often dominant.
 
-## 4) Estrategia recomendada de configuracao
+## 4) Recommended configuration strategy
 
-Definir modo de execucao configuravel no plugin/app:
+Define a configurable execution mode in the plugin/app:
 - cpu
 - nnapi
 - auto
 
-### Semantica dos modos
-- cpu: forca CPUExecutionProvider.
-- nnapi: tenta NNAPI; se indisponivel/invalido, erro explicito ou fallback controlado por flag.
-- auto: tenta NNAPI primeiro e cai para CPU com seguranca.
+### Mode semantics
+- cpu: force CPUExecutionProvider.
+- nnapi: try NNAPI; if unavailable/invalid, explicit error or flag-controlled fallback.
+- auto: try NNAPI first and fall back safely to CPU.
 
-### Parametros recomendados
-- numThreads (mapeado para intraOpNumThreads)
+### Recommended parameters
+- numThreads (mapped to intraOpNumThreads)
 - interOpNumThreads
 - graphOptimizationLevel
 - executionMode
 - enableMemoryPattern
 - enableCpuMemArena
 
-### Instrumentacao de performance (obrigatoria)
-Medir e registrar separadamente:
+### Performance instrumentation (required)
+Measure and record separately:
 - download
-- criacao da sessao
-- pre-processamento
-- inferencia
-- pos-processamento
+- session creation
+- pre-processing
+- inference
+- post-processing
 
-Registrar tambem:
-- provider efetivo usado
-- fallback ocorrido (sim/nao)
-- erro por op/provider
+Also record:
+- effective provider used
+- whether fallback occurred (yes/no)
+- errors by op/provider
 
-## 5) Otimizacao do modelo
+## 5) Model optimization
 
 ### Quantizacao INT8
-- Vantagem: grande reducao de latencia e memoria em CPU/NNAPI quando bem suportado.
-- Trade-off: pode degradar acuracia; exige validacao por dataset real.
+- Advantage: major latency and memory reduction on CPU/NNAPI when well supported.
+- Trade-off: can degrade accuracy; requires validation with real datasets.
 
 ### Float16 / mixed precision
-- Vantagem: possivel ganho em aceleradores compativeis.
-- Trade-off: suporte varia por backend/device; ganhos inconsistentes em CPU pura.
+- Advantage: possible gains on compatible accelerators.
+- Trade-off: support varies by backend/device; gains are inconsistent on pure CPU.
 
 ### Graph optimization
-- Aplicar no pipeline de export/conversao e manter ORT otimizado em runtime.
+- Apply in the export/conversion pipeline and keep ORT optimized at runtime.
 
 ### ORT format
-- Converter ONNX para ORT format pode reduzir custo de inicializacao e melhorar runtime.
-- Trade-off: pipeline de build/deploy mais complexo.
+- Converting ONNX to ORT format can reduce initialization cost and improve runtime.
+- Trade-off: more complex build/deploy pipeline.
 
-### Remocao de outputs desnecessarios
-- Reduz transferencia e pos-processamento.
-- Recomendado para cenarios de classificacao onde apenas top-k final e necessario no app.
+### Removing unnecessary outputs
+- Reduces transfer and post-processing.
+- Recommended for classification scenarios where only final top-k is needed in the app.
 
-### Reducao de input size
-- Impacto direto em latencia e memoria.
-- Trade-off: risco de perda de acuracia; validar curva latencia x qualidade.
+### Input size reduction
+- Direct impact on latency and memory.
+- Trade-off: risk of accuracy loss; validate the latency vs quality curve.
 
-## 6) Estrategia de benchmark por device
+## 6) Per-device benchmark strategy
 
-### Matriz de comparacao
-Executar por dispositivo e por modelo:
+### Comparison matrix
+Run per device and per model:
 - CPU single-thread
 - CPU multi-thread (2, 4)
 - NNAPI
-- XNNPACK (se disponivel na build)
+- XNNPACK (if available in the build)
 
 ### Metricas
-- latencia media
+- average latency
 - p95
-- memoria (pico e resident set aproximado)
-- falhas (crash, erro de sessao, fallback inesperado)
+- memory (peak and approximate resident set)
+- failures (crash, session error, unexpected fallback)
 - cold start vs warm start
 
-### Protocolo minimo
-- 5 execucoes de warmup
-- 30-100 execucoes medidas por cenario
-- bateria > 40% e temperatura controlada quando possivel
-- sem debugger anexado
+### Minimum protocol
+- 5 warmup runs
+- 30-100 measured runs per scenario
+- battery > 40% and controlled temperature when possible
+- no debugger attached
 
-## Recomendacao segura para producao
+## Safe recommendation for production
 
-1. Padrao em producao: modo auto com fallback seguro para CPU.
-2. Sessao criada uma vez no prepareModel e reutilizada por modelId+version; nunca recriar por inferencia.
-3. Execucao fora da main thread (ja alinhado com o plugin atual).
-4. Comecar com:
+1. Production default: auto mode with safe CPU fallback.
+2. Session created once in prepareModel and reused by modelId+version; never recreate per inference.
+3. Execution off the main thread (already aligned with the current plugin).
+4. Start with:
    - graphOptimizationLevel alto
    - interOpNumThreads = 1
-   - intraOpNumThreads = 2 ou 4 (ajustavel)
-5. Telemetria obrigatoria de etapa (download/sessao/pre/inferencia/pos) e provider efetivo.
-6. Rollout progressivo de NNAPI por device tier/fabricante (feature flag remota).
-7. Benchmark continuo e regressao por versao de modelo e versao de app.
+  - intraOpNumThreads = 2 or 4 (tunable)
+5. Required stage telemetry (download/session/pre/inference/post) and effective provider.
+6. Progressive NNAPI rollout by device tier/manufacturer (remote feature flag).
+7. Continuous benchmarking and regression tracking by model version and app version.
 
-## Uso do ONNX Runtime (checklist pratico)
+## ONNX Runtime usage (practical checklist)
 
 - Utilizar ONNX Runtime Android.
-- Configurar multithreading.
-- Configurar graph optimization.
-- Avaliar execution providers disponiveis no artefato Android.
-- Considerar NNAPI como caminho principal de aceleracao por hardware.
-- Implementar fallback seguro para CPU.
-- Criar sessao no prepareModel e reutilizar em todas as inferencias do mesmo modelId+version.
-- Executar inferencia fora da main thread.
+- Configure multithreading.
+- Configure graph optimization.
+- Evaluate execution providers available in the Android artifact.
+- Consider NNAPI as the main hardware acceleration path.
+- Implement safe CPU fallback.
+- Create session in prepareModel and reuse it for all inferences of the same modelId+version.
+- Run inference off the main thread.
 
-## Estado atual do plugin
+## Current plugin state
 
-- Fluxo atual: prepareModel ja resolve download/cache do arquivo e inicializa a sessao ONNX.
-- Reuso atual: classifyImage reutiliza a mesma sessao por modelId+version (sem recriar por chamada).
-- Implicacao pratica: o custo de inicializacao concentra no prepare/warmup, e a inferencia fica focada no run da sessao.
+- Current flow: prepareModel already handles file download/cache and initializes the ONNX session.
+- Current reuse: classifyImage reuses the same session by modelId+version (without recreating per call).
+- Practical implication: initialization cost is concentrated in prepare/warmup, and inference stays focused on session run.

@@ -11,7 +11,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 data class RawTensorInternal(
     val data: FloatArray,
-    val shape: LongArray,
+    val dims: LongArray,
     val type: String,
 )
 
@@ -47,11 +47,11 @@ class InferenceService(
         sessionManager.ensureSession(modelRef)
     }
 
-    suspend fun runInference(
+    suspend fun run(
         modelId: String,
         version: String,
         inputTensorData: FloatArray,
-        inputTensorShape: LongArray,
+        inputTensorDims: LongArray,
         inputTensorType: String,
     ): RawTensorInternal = withContext(Dispatchers.Default) {
         val modelRef = modelStore.resolve(modelId, version)
@@ -65,19 +65,19 @@ class InferenceService(
             if (inputTensorData.isEmpty()) {
                 throw IllegalStateException("INFERENCE_ERROR: input tensor data is empty")
             }
-            if (inputTensorShape.isEmpty()) {
-                throw IllegalStateException("INFERENCE_ERROR: input tensor shape is empty")
+            if (inputTensorDims.isEmpty()) {
+                throw IllegalStateException("INFERENCE_ERROR: input tensor dims is empty")
             }
 
             var elementCount = 1L
-            for (dim in inputTensorShape) {
+            for (dim in inputTensorDims) {
                 if (dim <= 0L) {
-                    throw IllegalStateException("INFERENCE_ERROR: input tensor shape must have positive dimensions")
+                    throw IllegalStateException("INFERENCE_ERROR: input tensor dims must have positive dimensions")
                 }
                 elementCount *= dim
             }
             if (elementCount != inputTensorData.size.toLong()) {
-                throw IllegalStateException("INFERENCE_ERROR: input tensor data size does not match shape")
+                throw IllegalStateException("INFERENCE_ERROR: input tensor data size does not match dims")
             }
 
             val input = sessionRef.session.inputInfo.entries.firstOrNull()
@@ -85,17 +85,17 @@ class InferenceService(
             val tensorInfo = input.value.info as? TensorInfo
                 ?: throw IllegalStateException("MODEL_INVALID: model input is not a tensor")
             val modelInputShape = tensorInfo.shape
-            if (modelInputShape.size != inputTensorShape.size) {
+            if (modelInputShape.size != inputTensorDims.size) {
                 throw IllegalStateException("INFERENCE_ERROR: input tensor rank does not match model input rank")
             }
             for (i in modelInputShape.indices) {
-                if (modelInputShape[i] > 0L && modelInputShape[i] != inputTensorShape[i]) {
-                    throw IllegalStateException("INFERENCE_ERROR: input tensor shape is incompatible with model input")
+                if (modelInputShape[i] > 0L && modelInputShape[i] != inputTensorDims[i]) {
+                    throw IllegalStateException("INFERENCE_ERROR: input tensor dims are incompatible with model input")
                 }
             }
 
             val env = sessionManager.ortEnvironment()
-            val tensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputTensorData), inputTensorShape)
+            val tensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputTensorData), inputTensorDims)
             val outputShapeHint = resolveOutputShapeHint(sessionRef.session)
 
             tensor.use { t ->
@@ -103,7 +103,7 @@ class InferenceService(
                     val logits = flattenToFloatArray(result[0].value)
                     return@withLock RawTensorInternal(
                         data = logits,
-                        shape = resolveOutputShape(logits.size, outputShapeHint),
+                        dims = resolveOutputShape(logits.size, outputShapeHint),
                         type = "float32",
                     )
                 }

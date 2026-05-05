@@ -47,12 +47,13 @@ class CapacitorOnnxPlugin : Plugin() {
     }
 
     @PluginMethod
-    fun prepareModel(call: PluginCall) {
+    fun loadModel(call: PluginCall) {
         val modelId = call.getString("modelId")
         val version = call.getString("version")
         val url = call.getString("url")
         val sha256 = call.getString("sha256")?.trim()?.takeIf { it.isNotEmpty() }
         val forceRedownload = call.getBoolean("forceRedownload", false) ?: false
+        val warmup = call.getBoolean("warmup", false) ?: false
         val sessionOptions = call.getObject("sessionOptions")
         val executionProvider = (sessionOptions?.optString("executionProvider", "auto") ?: "auto").lowercase()
 
@@ -104,11 +105,20 @@ class CapacitorOnnxPlugin : Plugin() {
                     forceRedownload = forceRedownload,
                     sessionConfig = sessionConfig,
                 )
+                val warmupLatencyMs = if (warmup) {
+                    val warmupStartMs = System.currentTimeMillis()
+                    inferenceService.warmup(modelId, version)
+                    System.currentTimeMillis() - warmupStartMs
+                } else {
+                    null
+                }
 
                 val result = JSObject().apply {
                     put("status", if (prepare.cacheHit) "cache_hit" else "downloaded")
                     put("sessionReady", true)
                     put("executionProviderUsed", prepare.executionProviderUsed)
+                    put("warmed", warmup)
+                    warmupLatencyMs?.let { put("warmupLatencyMs", it) }
                     put("latencyMs", System.currentTimeMillis() - startMs)
                 }
                 call.resolve(result)
@@ -144,7 +154,7 @@ class CapacitorOnnxPlugin : Plugin() {
     }
 
     @PluginMethod
-    fun runInference(call: PluginCall) {
+    fun run(call: PluginCall) {
         val modelId = call.getString("modelId")
         val version = call.getString("version")
         val inputTensor = call.getObject("inputTensor")
@@ -156,9 +166,9 @@ class CapacitorOnnxPlugin : Plugin() {
 
         val inputType = inputTensor.optString("type", "")
         val inputDataJson = inputTensor.optJSONArray("data")
-        val inputShapeJson = inputTensor.optJSONArray("shape")
-        if (inputDataJson == null || inputShapeJson == null) {
-            rejectStructured(call, "INFERENCE_ERROR", "Missing required inputTensor fields: data, shape")
+        val inputDimsJson = inputTensor.optJSONArray("dims")
+        if (inputDataJson == null || inputDimsJson == null) {
+            rejectStructured(call, "INFERENCE_ERROR", "Missing required inputTensor fields: data, dims")
             return
         }
 
@@ -170,22 +180,22 @@ class CapacitorOnnxPlugin : Plugin() {
             return
         }
 
-        val inputShape = LongArray(inputShapeJson.length()) { i ->
-            inputShapeJson.optLong(i, -1L)
+        val inputDims = LongArray(inputDimsJson.length()) { i ->
+            inputDimsJson.optLong(i, -1L)
         }
-        if (inputShape.any { it <= 0L }) {
-            rejectStructured(call, "INFERENCE_ERROR", "Invalid inputTensor.shape: all dimensions must be positive integers")
+        if (inputDims.any { it <= 0L }) {
+            rejectStructured(call, "INFERENCE_ERROR", "Invalid inputTensor.dims: all dimensions must be positive integers")
             return
         }
 
         pluginScope.launch {
             try {
                 val startMs = System.currentTimeMillis()
-                val predictions = inferenceService.runInference(
+                val predictions = inferenceService.run(
                     modelId = modelId,
                     version = version,
                     inputTensorData = inputData,
-                    inputTensorShape = inputShape,
+                    inputTensorDims = inputDims,
                     inputTensorType = inputType,
                 )
 
@@ -194,13 +204,13 @@ class CapacitorOnnxPlugin : Plugin() {
                     predictions.data.forEach { value ->
                         logitsData.put(value.toDouble())
                     }
-                    val logitsShape = JSArray()
-                    predictions.shape.forEach { dim ->
-                        logitsShape.put(dim.toDouble())
+                    val logitsDims = JSArray()
+                    predictions.dims.forEach { dim ->
+                        logitsDims.put(dim.toDouble())
                     }
                     put("logits", JSObject().apply {
                         put("data", logitsData)
-                        put("shape", logitsShape)
+                        put("dims", logitsDims)
                         put("type", predictions.type)
                     })
                     put("latencyMs", System.currentTimeMillis() - startMs)

@@ -10,6 +10,6 @@ export const CapacitorOnnx = {
   loadModel: CapacitorOnnxNative.loadModel.bind(CapacitorOnnxNative),
   run: CapacitorOnnxNative.run.bind(CapacitorOnnxNative),
   release: CapacitorOnnxNative.release.bind(CapacitorOnnxNative),
-  clearModel: () => CapacitorOnnxNative.clearModel.bind(CapacitorOnnxNative),
-  clearAllCache: () => CapacitorOnnxNative.clearAllCache.bind(CapacitorOnnxNative),
+  clearModel: CapacitorOnnxNative.clearModel.bind(CapacitorOnnxNative),
+  clearAllCache: CapacitorOnnxNative.clearAllCache.bind(CapacitorOnnxNative),
 };

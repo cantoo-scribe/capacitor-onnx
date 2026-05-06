@@ -19,10 +19,43 @@ import { elapsedMs, nowMs } from "../helpers/time";
 import { createSessionWithFallback } from "./provider-resolver";
 import { applyRuntimeThreads, applyWebRuntimeConfig } from "./runtime-config";
 
+const DEFAULT_CACHE_STORAGE: CacheStorage = {
+  read: async () => null,
+  write: async () => {},
+  delete: async () => {},
+};
+
+type SharedWebState = {
+  cacheStorage: CacheStorage;
+};
+
+const SHARED_WEB_STATE_KEY = "__cantooCapacitorOnnxWebState__";
+
+function getSharedWebState(): SharedWebState {
+  const globalScope = globalThis as typeof globalThis & {
+    [SHARED_WEB_STATE_KEY]?: SharedWebState;
+  };
+
+  if (!globalScope[SHARED_WEB_STATE_KEY]) {
+    globalScope[SHARED_WEB_STATE_KEY] = {
+      cacheStorage: DEFAULT_CACHE_STORAGE,
+    };
+  }
+
+  return globalScope[SHARED_WEB_STATE_KEY];
+}
+
 export class CapacitorOnnxWeb extends WebPlugin implements CapacitorOnnxPlugin {
   private sessions = new Map<string, ort.InferenceSession>();
   private knownModelKeys = new Set<string>();
-  private static cacheStorage: CacheStorage;
+
+  private static get cacheStorage(): CacheStorage {
+    return getSharedWebState().cacheStorage;
+  }
+
+  private static set cacheStorage(value: CacheStorage) {
+    getSharedWebState().cacheStorage = value;
+  }
 
   private static modelKey(modelId: string, version: string): string {
     return `model-${modelId}-${version}`;
@@ -30,12 +63,7 @@ export class CapacitorOnnxWeb extends WebPlugin implements CapacitorOnnxPlugin {
 
   static setWebConfig(config?: WebConfig): void {
     applyWebRuntimeConfig(config?.wasmPath);
-
-    CapacitorOnnxWeb.cacheStorage = config?.cacheStorage ?? {
-      read: async () => null,
-      write: async () => {},
-      delete: async () => {},
-    };
+    CapacitorOnnxWeb.cacheStorage = config?.cacheStorage ?? DEFAULT_CACHE_STORAGE;
   }
 
   async loadModel(_input: LoadModelInput): Promise<LoadModelResult> {

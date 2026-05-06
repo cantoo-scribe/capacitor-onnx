@@ -20,8 +20,9 @@ Current `CapacitorOnnx` facade methods:
 
 - `loadModel(input)`
 - `run({ modelId, version, inputTensor })`
-- `clear()` (returns a bound `clearModel` function)
-- `clearAllCache()` (returns a bound function)
+- `release({ modelId, version })`
+- `clearModel()`
+- `clearAllCache()`
 
 Host/iFrame bridge implementation is no longer part of this package and was moved to a dedicated package.
 

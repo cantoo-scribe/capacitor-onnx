@@ -270,6 +270,26 @@ class CapacitorOnnxPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun release(call: PluginCall) {
+        val modelId = call.getString("modelId")
+        val version = call.getString("version")
+
+        if (modelId == null || version == null) {
+            rejectStructured(call, "INFERENCE_ERROR", "Missing required fields: modelId, version")
+            return
+        }
+
+        pluginScope.launch {
+            try {
+                sessionManager.closeSession(modelId, version)
+                call.resolve()
+            } catch (e: Throwable) {
+                rejectStructured(call, e)
+            }
+        }
+    }
+
+    @PluginMethod
     fun clearAllCache(call: PluginCall) {
         pluginScope.launch {
             try {

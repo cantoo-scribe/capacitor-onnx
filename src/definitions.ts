@@ -87,6 +87,7 @@ export interface ClearAllCacheResult {
 export interface CapacitorOnnxPlugin {
   loadModel(input: LoadModelInput): Promise<LoadModelResult>;
   run(input: RunInput): Promise<RunResult>;
+  release(input: ClearModelInput): Promise<void>;
   clearModel(input: ClearModelInput): Promise<ClearModelResult>;
   clearAllCache(): Promise<ClearAllCacheResult>;
 }

@@ -1,6 +1,6 @@
 import * as ort from "onnxruntime-web";
-import type { SessionOptionsInput } from "./definitions";
-import { CapacitorOnnxError } from "./errors";
+import type { SessionOptionsInput } from "../definitions";
+import { CapacitorOnnxError } from "../errors";
 
 export type WebExecutionProvider = "wasm" | "webgpu" | "webnn";
 

@@ -13,11 +13,11 @@ import type {
   RunResult,
   SessionOptionsInput,
   WebConfig,
-} from "./definitions";
-import { CapacitorOnnxError } from "./errors";
-import { elapsedMs, nowMs } from "./helpers/time";
-import { createSessionWithFallback } from "./web-provider-resolver";
-import { applyRuntimeThreads, applyWebRuntimeConfig } from "./web-runtime-config";
+} from "../definitions";
+import { CapacitorOnnxError } from "../errors";
+import { elapsedMs, nowMs } from "../helpers/time";
+import { createSessionWithFallback } from "./provider-resolver";
+import { applyRuntimeThreads, applyWebRuntimeConfig } from "./runtime-config";
 
 export class CapacitorOnnxWeb extends WebPlugin implements CapacitorOnnxPlugin {
   private sessions = new Map<string, ort.InferenceSession>();
@@ -142,14 +142,18 @@ export class CapacitorOnnxWeb extends WebPlugin implements CapacitorOnnxPlugin {
     };
   }
 
-  async clearModel(_input: ClearModelInput): Promise<ClearModelResult> {
+  async release(_input: ClearModelInput): Promise<void> {
     const modelKey = CapacitorOnnxWeb.modelKey(_input.modelId, _input.version);
     const session = this.sessions.get(modelKey);
-
     if (session) {
       await session.release().catch(() => {});
       this.sessions.delete(modelKey);
     }
+  }
+
+  async clearModel(_input: ClearModelInput): Promise<ClearModelResult> {
+    const modelKey = CapacitorOnnxWeb.modelKey(_input.modelId, _input.version);
+    await this.release(_input);
 
     this.knownModelKeys.delete(modelKey);
     await CapacitorOnnxWeb.cacheStorage.delete(modelKey).catch(() => {});

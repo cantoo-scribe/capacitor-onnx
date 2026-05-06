@@ -1,9 +1,8 @@
-import { Capacitor } from '@capacitor/core';
-import { CapacitorOnnx } from '@cantoo/capacitor-onnx';
+import type { LoadModelResult, RunResult } from "@cantoo/capacitor-onnx";
+import { CapacitorOnnx } from "@cantoo/capacitor-onnx";
+import { Capacitor } from "@capacitor/core";
 
-import type { LoadModelResult, RunResult } from '@cantoo/capacitor-onnx';
-
-import './style.css';
+import "./style.css";
 
 type AssertionResult = {
   name: string;
@@ -45,43 +44,45 @@ const loadModelInFlight = new Map<string, Promise<LoadModelResult>>();
 let isModelLoading = false;
 
 function makeRampData(length: number): number[] {
-  return Array.from({ length }, (_, index) => Number((index / Math.max(1, length - 1)).toFixed(6)));
+  return Array.from({ length }, (_, index) =>
+    Number((index / Math.max(1, length - 1)).toFixed(6)),
+  );
 }
 
 const inferencePresets: InferencePreset[] = [
   {
-    id: 'audio-silence-short',
-    label: 'Audio short silence (zeros)',
-    modelId: 'demo-model',
-    version: '1.0.0',
+    id: "audio-silence-short",
+    label: "Audio short silence (zeros)",
+    modelId: "demo-model",
+    version: "1.0.0",
     tensorData: [0, 0, 0, 0],
   },
   {
-    id: 'audio-short-ramp',
-    label: 'Audio short ramp',
-    modelId: 'demo-model',
-    version: '1.0.0',
+    id: "audio-short-ramp",
+    label: "Audio short ramp",
+    modelId: "demo-model",
+    version: "1.0.0",
     tensorData: [0.1, 0.2, 0.3, 0.4],
   },
   {
-    id: 'audio-short-pulse',
-    label: 'Audio short pulse',
-    modelId: 'demo-model',
-    version: '1.0.0',
+    id: "audio-short-pulse",
+    label: "Audio short pulse",
+    modelId: "demo-model",
+    version: "1.0.0",
     tensorData: [1, 0, 1, 0],
   },
   {
-    id: 'audio-long-ramp',
-    label: 'Audio long ramp (192 samples)',
-    modelId: 'demo-model',
-    version: '1.0.0',
+    id: "audio-long-ramp",
+    label: "Audio long ramp (192 samples)",
+    modelId: "demo-model",
+    version: "1.0.0",
     tensorData: makeRampData(192),
   },
 ];
 
-const app = document.querySelector<HTMLDivElement>('#app');
+const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
-  throw new Error('Failed to find app root element');
+  throw new Error("Failed to find app root element");
 }
 
 app.innerHTML = `
@@ -97,7 +98,7 @@ app.innerHTML = `
             <select id="input-preset">
               ${inferencePresets
                 .map((preset) => `<option value="${preset.id}">${preset.label}</option>`)
-                .join('')}
+                .join("")}
             </select>
           </label>
           <button id="btn-apply-preset" type="button">Apply preset</button>
@@ -153,9 +154,9 @@ app.innerHTML = `
   </main>
 `;
 
-const output = document.querySelector<HTMLPreElement>('#output');
+const output = document.querySelector<HTMLPreElement>("#output");
 if (!output) {
-  throw new Error('Failed to find output element');
+  throw new Error("Failed to find output element");
 }
 const outputElement: HTMLPreElement = output;
 
@@ -165,7 +166,7 @@ function writeOutput(data: unknown) {
 
 function parseCsvNumbers(raw: string): number[] {
   return raw
-    .split(',')
+    .split(",")
     .map((item) => item.trim())
     .filter((item) => item.length > 0)
     .map((item) => Number(item));
@@ -174,10 +175,10 @@ function parseCsvNumbers(raw: string): number[] {
 function parseTensorData(raw: string): number[] {
   const values = parseCsvNumbers(raw);
   if (values.length === 0) {
-    throw new Error('inputTensor.data is required');
+    throw new Error("inputTensor.data is required");
   }
   if (values.some((value) => Number.isNaN(value) || !Number.isFinite(value))) {
-    throw new Error('inputTensor.data must contain only finite numeric values');
+    throw new Error("inputTensor.data must contain only finite numeric values");
   }
   return values;
 }
@@ -190,7 +191,11 @@ function parsePositiveNumber(value: string, fieldName: string): number {
   return parsed;
 }
 
-function generateMockAudioCsv(sampleRate: number, durationMs: number, frequencyHz: number): string {
+function generateMockAudioCsv(
+  sampleRate: number,
+  durationMs: number,
+  frequencyHz: number,
+): string {
   const totalSamples = Math.max(1, Math.floor((sampleRate * durationMs) / 1000));
   const twoPiF = 2 * Math.PI * frequencyHz;
   const values = new Array<string>(totalSamples);
@@ -204,14 +209,14 @@ function generateMockAudioCsv(sampleRate: number, durationMs: number, frequencyH
     values[i] = sample.toFixed(6);
   }
 
-  return values.join(',');
+  return values.join(",");
 }
 
 function validateNormalizedAudioLength(values: number[]) {
   // Guardrail for manual smoke tests: very short vectors usually indicate placeholder input.
   if (values.length < 64) {
     throw new Error(
-      'normalizedData is too short for audio inference. Provide real normalized audio samples (e.g., hundreds/thousands of values), not a tiny placeholder like 0,0,0,0.',
+      "normalizedData is too short for audio inference. Provide real normalized audio samples (e.g., hundreds/thousands of values), not a tiny placeholder like 0,0,0,0.",
     );
   }
 }
@@ -222,7 +227,7 @@ function product(values: readonly number[]): number {
 
 function normalizePluginError(error: unknown): NormalizedPluginError {
   const asRecord = (value: unknown): Record<string, unknown> | undefined => {
-    if (typeof value === 'object' && value !== null) {
+    if (typeof value === "object" && value !== null) {
       return value as Record<string, unknown>;
     }
     return undefined;
@@ -231,23 +236,23 @@ function normalizePluginError(error: unknown): NormalizedPluginError {
   const root = asRecord(error);
   const nestedData = asRecord(root?.data);
   const message =
-    (typeof root?.message === 'string' && root.message) ||
-    (typeof nestedData?.message === 'string' && nestedData.message) ||
-    'Unknown plugin error';
+    (typeof root?.message === "string" && root.message) ||
+    (typeof nestedData?.message === "string" && nestedData.message) ||
+    "Unknown plugin error";
 
   const code =
-    (typeof root?.code === 'string' && root.code) ||
-    (typeof nestedData?.code === 'string' && nestedData.code) ||
+    (typeof root?.code === "string" && root.code) ||
+    (typeof nestedData?.code === "string" && nestedData.code) ||
     undefined;
 
   const retryable =
-    (typeof root?.retryable === 'boolean' && root.retryable) ||
-    (typeof nestedData?.retryable === 'boolean' && nestedData.retryable) ||
+    (typeof root?.retryable === "boolean" && root.retryable) ||
+    (typeof nestedData?.retryable === "boolean" && nestedData.retryable) ||
     undefined;
 
   const correlationId =
-    (typeof root?.correlationId === 'string' && root.correlationId) ||
-    (typeof nestedData?.correlationId === 'string' && nestedData.correlationId) ||
+    (typeof root?.correlationId === "string" && root.correlationId) ||
+    (typeof nestedData?.correlationId === "string" && nestedData.correlationId) ||
     undefined;
 
   const details = nestedData?.details ?? root?.details;
@@ -267,17 +272,27 @@ function assertion(name: string, ok: boolean, details?: unknown): AssertionResul
 }
 
 function getFormFields() {
-  const modelIdInput = document.querySelector<HTMLInputElement>('#input-model-id');
-  const versionInput = document.querySelector<HTMLInputElement>('#input-version');
-  const urlInput = document.querySelector<HTMLInputElement>('#input-url');
-  const shaInput = document.querySelector<HTMLInputElement>('#input-sha256');
-  const normalizedInput = document.querySelector<HTMLTextAreaElement>('#input-normalized-data');
-  const mockSampleRateInput = document.querySelector<HTMLInputElement>('#input-mock-sample-rate');
-  const mockDurationInput = document.querySelector<HTMLInputElement>('#input-mock-duration-ms');
-  const mockFrequencyInput = document.querySelector<HTMLInputElement>('#input-mock-frequency-hz');
-  const presetSelect = document.querySelector<HTMLSelectElement>('#input-preset');
-  const applyPresetButton = document.querySelector<HTMLButtonElement>('#btn-apply-preset');
-  const generateMockAudioButton = document.querySelector<HTMLButtonElement>('#btn-generate-mock-audio');
+  const modelIdInput = document.querySelector<HTMLInputElement>("#input-model-id");
+  const versionInput = document.querySelector<HTMLInputElement>("#input-version");
+  const urlInput = document.querySelector<HTMLInputElement>("#input-url");
+  const shaInput = document.querySelector<HTMLInputElement>("#input-sha256");
+  const normalizedInput = document.querySelector<HTMLTextAreaElement>(
+    "#input-normalized-data",
+  );
+  const mockSampleRateInput = document.querySelector<HTMLInputElement>(
+    "#input-mock-sample-rate",
+  );
+  const mockDurationInput = document.querySelector<HTMLInputElement>(
+    "#input-mock-duration-ms",
+  );
+  const mockFrequencyInput = document.querySelector<HTMLInputElement>(
+    "#input-mock-frequency-hz",
+  );
+  const presetSelect = document.querySelector<HTMLSelectElement>("#input-preset");
+  const applyPresetButton = document.querySelector<HTMLButtonElement>("#btn-apply-preset");
+  const generateMockAudioButton = document.querySelector<HTMLButtonElement>(
+    "#btn-generate-mock-audio",
+  );
 
   if (
     !modelIdInput ||
@@ -292,7 +307,7 @@ function getFormFields() {
     !applyPresetButton ||
     !generateMockAudioButton
   ) {
-    throw new Error('Failed to resolve one or more config fields');
+    throw new Error("Failed to resolve one or more config fields");
   }
 
   return {
@@ -319,12 +334,12 @@ function applyPreset(presetId: string) {
   const fields = getFormFields();
   fields.modelIdInput.value = preset.modelId;
   fields.versionInput.value = preset.version;
-  fields.normalizedInput.value = preset.tensorData.join(',');
+  fields.normalizedInput.value = preset.tensorData.join(",");
 
-    writeOutput({
-      operation: 'apply-preset',
-      preset: preset.label,
-      note: 'Preset applied. Fill model URL and (optionally) SHA-256, then click Load model and Run inference.',
+  writeOutput({
+    operation: "apply-preset",
+    preset: preset.label,
+    note: "Preset applied. Fill model URL and (optionally) SHA-256, then click Load model and Run inference.",
   });
 }
 
@@ -338,7 +353,7 @@ function getLoadConfigFromForm(): InferenceSuccessConfig {
   const sha256 = sha256Raw.length > 0 ? sha256Raw : undefined;
 
   if (!modelId || !version || !url) {
-    throw new Error('modelId, version and url are required to load model');
+    throw new Error("modelId, version and url are required to load model");
   }
 
   return {
@@ -358,7 +373,7 @@ function getRunConfigFromForm(): RunInferenceConfig {
   validateNormalizedAudioLength(normalizedData);
 
   if (!modelId || !version) {
-    throw new Error('modelId and version are required to run inference');
+    throw new Error("modelId and version are required to run inference");
   }
 
   return {
@@ -369,17 +384,22 @@ function getRunConfigFromForm(): RunInferenceConfig {
 }
 
 function getModelLoadKey(config: InferenceSuccessConfig): string {
-  return `${config.modelId}::${config.version}::${config.url}::${config.sha256 ?? ''}`;
+  return `${config.modelId}::${config.version}::${config.url}::${config.sha256 ?? ""}`;
 }
 
-const loadModelButton = document.querySelector<HTMLButtonElement>('#btn-load-model');
-const successE2EButton = document.querySelector<HTMLButtonElement>('#btn-success-e2e');
-const errorE2EButton = document.querySelector<HTMLButtonElement>('#btn-error-e2e');
-const clearModelCacheButton = document.querySelector<HTMLButtonElement>('#btn-clear-model-cache');
-const clearAllCacheButton = document.querySelector<HTMLButtonElement>('#btn-clear-all-cache');
-const presetSelect = document.querySelector<HTMLSelectElement>('#input-preset');
-const applyPresetButton = document.querySelector<HTMLButtonElement>('#btn-apply-preset');
-const generateMockAudioButton = document.querySelector<HTMLButtonElement>('#btn-generate-mock-audio');
+const loadModelButton = document.querySelector<HTMLButtonElement>("#btn-load-model");
+const successE2EButton = document.querySelector<HTMLButtonElement>("#btn-success-e2e");
+const errorE2EButton = document.querySelector<HTMLButtonElement>("#btn-error-e2e");
+const clearModelCacheButton = document.querySelector<HTMLButtonElement>(
+  "#btn-clear-model-cache",
+);
+const clearAllCacheButton =
+  document.querySelector<HTMLButtonElement>("#btn-clear-all-cache");
+const presetSelect = document.querySelector<HTMLSelectElement>("#input-preset");
+const applyPresetButton = document.querySelector<HTMLButtonElement>("#btn-apply-preset");
+const generateMockAudioButton = document.querySelector<HTMLButtonElement>(
+  "#btn-generate-mock-audio",
+);
 
 if (
   !loadModelButton ||
@@ -391,7 +411,7 @@ if (
   !applyPresetButton ||
   !generateMockAudioButton
 ) {
-  throw new Error('Failed to find one or more action buttons');
+  throw new Error("Failed to find one or more action buttons");
 }
 
 const actionButtons = [
@@ -415,7 +435,9 @@ function setModelLoading(loading: boolean) {
   setActionButtonsDisabled(loading);
 }
 
-async function ensureModelPrepared(config: InferenceSuccessConfig): Promise<LoadModelResult> {
+async function ensureModelPrepared(
+  config: InferenceSuccessConfig,
+): Promise<LoadModelResult> {
   const key = getModelLoadKey(config);
   const existing = loadModelInFlight.get(key);
   if (existing) {
@@ -440,45 +462,44 @@ async function ensureModelPrepared(config: InferenceSuccessConfig): Promise<Load
   }
 }
 
-applyPresetButton.addEventListener('click', () => {
+applyPresetButton.addEventListener("click", () => {
   try {
     applyPreset(presetSelect.value);
   } catch (error) {
     writeOutput({
-      operation: 'apply-preset',
+      operation: "apply-preset",
       error: normalizePluginError(error),
     });
   }
 });
 
-generateMockAudioButton.addEventListener('click', () => {
+generateMockAudioButton.addEventListener("click", () => {
   try {
-    const { normalizedInput, mockSampleRateInput, mockDurationInput, mockFrequencyInput } = getFormFields();
-    const sampleRate = parsePositiveNumber(mockSampleRateInput.value, 'sample rate');
-    const durationMs = parsePositiveNumber(mockDurationInput.value, 'duration');
-    const frequencyHz = parsePositiveNumber(mockFrequencyInput.value, 'frequency');
+    const { normalizedInput, mockSampleRateInput, mockDurationInput, mockFrequencyInput } =
+      getFormFields();
+    const sampleRate = parsePositiveNumber(mockSampleRateInput.value, "sample rate");
+    const durationMs = parsePositiveNumber(mockDurationInput.value, "duration");
+    const frequencyHz = parsePositiveNumber(mockFrequencyInput.value, "frequency");
     const csv = generateMockAudioCsv(sampleRate, durationMs, frequencyHz);
     normalizedInput.value = csv;
 
     writeOutput({
-      operation: 'generate-mock-audio',
+      operation: "generate-mock-audio",
       sampleRate,
       durationMs,
       frequencyHz,
       sampleCount: Math.floor((sampleRate * durationMs) / 1000),
-      note: 'Mock audio generated and applied to normalized input field.',
+      note: "Mock audio generated and applied to normalized input field.",
     });
   } catch (error) {
     writeOutput({
-      operation: 'generate-mock-audio',
+      operation: "generate-mock-audio",
       error: normalizePluginError(error),
     });
   }
 });
 
-
-
-loadModelButton.addEventListener('click', async () => {
+loadModelButton.addEventListener("click", async () => {
   const startedAt = Date.now();
   try {
     if (isModelLoading) {
@@ -490,7 +511,7 @@ loadModelButton.addEventListener('click', async () => {
 
     writeOutput({
       platform: Capacitor.getPlatform(),
-      operation: 'load-model',
+      operation: "load-model",
       passed: loadModel.sessionReady === true,
       durationMs: Date.now() - startedAt,
       loadModel,
@@ -498,7 +519,7 @@ loadModelButton.addEventListener('click', async () => {
   } catch (error) {
     writeOutput({
       platform: Capacitor.getPlatform(),
-      operation: 'load-model',
+      operation: "load-model",
       passed: false,
       durationMs: Date.now() - startedAt,
       error: normalizePluginError(error),
@@ -506,7 +527,7 @@ loadModelButton.addEventListener('click', async () => {
   }
 });
 
-successE2EButton.addEventListener('click', async () => {
+successE2EButton.addEventListener("click", async () => {
   const startedAt = Date.now();
   try {
     if (isModelLoading) {
@@ -521,20 +542,28 @@ successE2EButton.addEventListener('click', async () => {
       inputTensor: {
         data: config.normalizedData,
         dims: [1, config.normalizedData.length],
-        type: 'float32',
-      }
+        type: "float32",
+      },
     });
 
     const assertions: AssertionResult[] = [
-      assertion('runInference.logits.type', inference.logits.type === 'float32', inference.logits.type),
-      assertion('runInference.latencyMs is numeric', Number.isFinite(inference.latencyMs), inference.latencyMs),
+      assertion(
+        "runInference.logits.type",
+        inference.logits.type === "float32",
+        inference.logits.type,
+      ),
+      assertion(
+        "runInference.latencyMs is numeric",
+        Number.isFinite(inference.latencyMs),
+        inference.latencyMs,
+      ),
     ];
 
     const allPassed = assertions.every((item) => item.ok);
 
     writeOutput({
       platform: Capacitor.getPlatform(),
-      operation: 'success-e2e',
+      operation: "success-e2e",
       passed: allPassed,
       durationMs: Date.now() - startedAt,
       assertions,
@@ -547,7 +576,7 @@ successE2EButton.addEventListener('click', async () => {
   } catch (error) {
     writeOutput({
       platform: Capacitor.getPlatform(),
-      operation: 'success-e2e',
+      operation: "success-e2e",
       passed: false,
       durationMs: Date.now() - startedAt,
       error: normalizePluginError(error),
@@ -555,7 +584,7 @@ successE2EButton.addEventListener('click', async () => {
   }
 });
 
-clearModelCacheButton.addEventListener('click', async () => {
+clearModelCacheButton.addEventListener("click", async () => {
   if (isModelLoading) {
     return;
   }
@@ -566,92 +595,94 @@ clearModelCacheButton.addEventListener('click', async () => {
     const version = versionInput.value.trim();
 
     if (!modelId || !version) {
-      throw new Error('modelId and version are required to clear model cache');
+      throw new Error("modelId and version are required to clear model cache");
     }
 
-    const clearModel = CapacitorOnnx.clear();
-    const result = await clearModel({
+    const result = await CapacitorOnnx.clearModel({
       modelId,
       version,
     });
 
     writeOutput({
       platform: Capacitor.getPlatform(),
-      operation: 'clear-model-cache',
+      operation: "clear-model-cache",
       result,
     });
   } catch (error) {
     writeOutput({
       platform: Capacitor.getPlatform(),
-      operation: 'clear-model-cache',
+      operation: "clear-model-cache",
       error: normalizePluginError(error),
     });
   }
 });
 
-clearAllCacheButton.addEventListener('click', async () => {
+clearAllCacheButton.addEventListener("click", async () => {
   if (isModelLoading) {
     return;
   }
 
   try {
-    const clearAllCache = CapacitorOnnx.clearAllCache();
-    const result = await clearAllCache();
+    const result = await CapacitorOnnx.clearAllCache();
     writeOutput({
       platform: Capacitor.getPlatform(),
-      operation: 'clear-all-cache',
+      operation: "clear-all-cache",
       result,
     });
   } catch (error) {
     writeOutput({
       platform: Capacitor.getPlatform(),
-      operation: 'clear-all-cache',
+      operation: "clear-all-cache",
       error: normalizePluginError(error),
     });
   }
 });
 
-errorE2EButton.addEventListener('click', async () => {
+errorE2EButton.addEventListener("click", async () => {
   const startedAt = Date.now();
   try {
     // Intentionally invalid model/version to force plugin-side structured error contract.
     await CapacitorOnnx.run({
-      modelId: 'missing-model',
-      version: '0.0.0',
+      modelId: "missing-model",
+      version: "0.0.0",
       inputTensor: {
         data: [0, 0, 0, 0],
         dims: [1, 4],
-        type: 'float32',
+        type: "float32",
       },
     });
 
     writeOutput({
       platform: Capacitor.getPlatform(),
-      operation: 'error-e2e',
+      operation: "error-e2e",
       passed: false,
       durationMs: Date.now() - startedAt,
-      reason: 'Expected runInference to fail but it succeeded',
+      reason: "Expected runInference to fail but it succeeded",
     });
   } catch (error) {
     const normalized = normalizePluginError(error);
     const assertions: AssertionResult[] = [
-      assertion('error has code', typeof normalized.code === 'string' && normalized.code.length > 0, normalized.code),
-      assertion('error has message', normalized.message.length > 0, normalized.message),
       assertion(
-        'error has retryable boolean',
-        typeof normalized.retryable === 'boolean',
+        "error has code",
+        typeof normalized.code === "string" && normalized.code.length > 0,
+        normalized.code,
+      ),
+      assertion("error has message", normalized.message.length > 0, normalized.message),
+      assertion(
+        "error has retryable boolean",
+        typeof normalized.retryable === "boolean",
         normalized.retryable,
       ),
       assertion(
-        'error has correlationId',
-        typeof normalized.correlationId === 'string' && normalized.correlationId.length > 0,
+        "error has correlationId",
+        typeof normalized.correlationId === "string" && normalized.correlationId.length > 0,
         normalized.correlationId,
       ),
     ];
 
     writeOutput({
       platform: Capacitor.getPlatform(),
-      operation: 'error-e2e',
+      operation: "error-e2e",
       passed: assertions.every((item) => item.ok),
       durationMs: Date.now() - startedAt,
       assertions,

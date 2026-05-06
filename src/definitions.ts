@@ -1,12 +1,13 @@
 export type PluginErrorCode =
-  | 'NETWORK_ERROR'
-  | 'INTEGRITY_ERROR'
-  | 'MODEL_INVALID'
-  | 'SESSION_INIT_ERROR'
-  | 'INFERENCE_ERROR'
-  | 'TIMEOUT'
-  | 'CANCELED'
-  | 'INTERNAL_ERROR';
+  | "NETWORK_ERROR"
+  | "INTEGRITY_ERROR"
+  | "MODEL_INTEGRITY_ERROR"
+  | "MODEL_INVALID"
+  | "SESSION_INIT_ERROR"
+  | "INFERENCE_ERROR"
+  | "TIMEOUT"
+  | "CANCELED"
+  | "INTERNAL_ERROR";
 
 export interface PluginError {
   code: PluginErrorCode;
@@ -14,6 +15,17 @@ export interface PluginError {
   retryable: boolean;
   correlationId?: string;
   details?: Record<string, unknown>;
+}
+
+export type CacheStorage = {
+  read: (path: string) => Promise<ArrayBuffer | null>;
+  write: (path: string, data: ArrayBuffer) => Promise<void>;
+  delete: (path: string) => Promise<void>;
+};
+
+export interface WebConfig {
+  cacheStorage?: CacheStorage | null;
+  wasmPath?: string;
 }
 
 export interface LoadModelInput {
@@ -28,16 +40,16 @@ export interface LoadModelInput {
 }
 
 export interface LoadModelResult {
-  status: 'downloaded' | 'cache_hit';
+  status: "downloaded" | "cache_hit";
   sessionReady: boolean;
   warmed?: boolean;
   warmupLatencyMs?: number;
   latencyMs: number;
-  executionProviderUsed?: 'cpu' | 'nnapi';
+  executionProviderUsed?: "cpu" | "nnapi" | "wasm" | "webgpu" | "webnn";
 }
 
 export interface SessionOptionsInput {
-  executionProvider?: 'cpu' | 'nnapi' | 'auto';
+  executionProvider?: "cpu" | "nnapi" | "auto" | "wasm" | "webgpu" | "webnn";
   intraOpNumThreads?: number;
   interOpNumThreads?: number;
 }
@@ -51,7 +63,7 @@ export interface RunInput {
 export interface RawTensor {
   data: number[];
   dims?: readonly number[];
-  type: 'float32' | 'float16' | 'int32' | 'int64' | 'uint32' | 'uint8' | 'bool';
+  type: "float32" | "float16" | "int32" | "int64" | "uint32" | "uint8" | "bool";
 }
 
 export interface RunResult {

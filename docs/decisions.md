@@ -61,6 +61,16 @@
 - Rationale: Align Web behavior with Android expectations and avoid ambiguous cache telemetry.
 - Consequence: `run`, `clearModel`, and cache operations are keyed per model version, reducing coupling to a single active session.
 
+## 2026-05-06 - iOS native implementation
+- Decision: Mirror the Android architecture in Swift: ModelStore (download/cache/SHA-256), SessionManager (ORTSession lifecycle, CoreML EP), InferenceService (per-session NSLock, run/warmup).
+- Rationale: Consistent contract across platforms; same error codes, same session key scheme (`modelId::version`), same atomic cache promotion.
+- Consequence: `executionProvider` mapping on iOS: `cpu`→CPU, `nnapi`/`coreml`→CoreML, `auto`→CoreML with CPU fallback, web providers→CPU. `coreml` added to TS types.
+
+## 2026-05-06 - iOS distributed via SPM only (no CocoaPods podspec)
+- Decision: Remove the CocoaPods podspec and distribute the iOS plugin exclusively via Swift Package Manager (`Package.swift`).
+- Rationale: `onnxruntime` is not published on CocoaPods; a podspec without the dependency would not compile. SPM is the supported distribution channel for `onnxruntime-swift-package-manager`.
+- Consequence: iOS consumers must add the plugin as an SPM package in Xcode. CocoaPods-based Capacitor apps cannot use the iOS native implementation.
+
 ## 2026-05-06 - Web runtime split by concern
 - Decision: Extract Web runtime setup and provider resolution into dedicated modules: [src/web-runtime-config.ts](../src/web-runtime-config.ts) and [src/web-provider-resolver.ts](../src/web-provider-resolver.ts).
 - Rationale: Keep plugin orchestration focused and make provider/runtime logic easier to test and evolve independently.

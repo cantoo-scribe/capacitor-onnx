@@ -66,7 +66,7 @@ function resolveProviderCandidates(
     return ["webnn", "wasm"];
   }
 
-  if (normalized === "cpu" || normalized === "nnapi") {
+  if (normalized === "cpu" || normalized === "nnapi" || normalized === "coreml") {
     return ["wasm"];
   }
 

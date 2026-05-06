@@ -21,6 +21,8 @@
   "files": [
     "android/src",
     "android/build.gradle",
+    "ios/Plugin",
+    "Package.swift",
     "dist"
   ],
   "scripts": {

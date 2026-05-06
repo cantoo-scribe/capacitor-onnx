@@ -51,3 +51,18 @@
 - Rationale: The current build is already ESM, the target ecosystem (Capacitor + Vite) is ESM-first, and this reduces operational complexity versus a dual build (CJS + ESM).
 - Consequence: Consumers must use `import` (not `require`), and the package's public surface is controlled by `exports`.
 
+## 2026-05-06 - Web provider resolution with explicit fallback
+- Decision: In Web, resolve execution provider from `sessionOptions.executionProvider` with support for `auto`, `wasm`, `webgpu`, and `webnn`, mapping Android aliases (`cpu`, `nnapi`) to `wasm`.
+- Rationale: Keep cross-platform API compatibility while enabling accelerated Web providers when available.
+- Consequence: In `auto`, the Web runtime attempts accelerated providers first and falls back to `wasm`; `loadModel` returns `executionProviderUsed` with the effective provider.
+
+## 2026-05-06 - Web session/cache semantics aligned by model key
+- Decision: Manage Web sessions by `modelId+version` and enforce strict `loadModel.status` semantics (`cache_hit` only for valid cache reuse, `downloaded` for network fetch).
+- Rationale: Align Web behavior with Android expectations and avoid ambiguous cache telemetry.
+- Consequence: `run`, `clearModel`, and cache operations are keyed per model version, reducing coupling to a single active session.
+
+## 2026-05-06 - Web runtime split by concern
+- Decision: Extract Web runtime setup and provider resolution into dedicated modules: [src/web-runtime-config.ts](../src/web-runtime-config.ts) and [src/web-provider-resolver.ts](../src/web-provider-resolver.ts).
+- Rationale: Keep plugin orchestration focused and make provider/runtime logic easier to test and evolve independently.
+- Consequence: `src/web.ts` now orchestrates model lifecycle while platform/runtime concerns are centralized in dedicated helpers.
+

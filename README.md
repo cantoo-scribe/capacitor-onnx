@@ -1,6 +1,6 @@
 # @cantoo/capacitor-onnx
 
-Capacitor plugin for native ONNX Runtime inference on Android.
+Capacitor plugin for ONNX Runtime inference on Android and Web.
 
 ## Install
 
@@ -19,7 +19,7 @@ The package exports:
 Current `CapacitorOnnx` facade methods:
 
 - `loadModel(input)`
-- `run({ modelId, version, audioData })`
+- `run({ modelId, version, inputTensor })`
 - `clear()` (returns a bound `clearModel` function)
 - `clearAllCache()` (returns a bound function)
 
@@ -39,7 +39,11 @@ await CapacitorOnnx.loadModel({
 const result = await CapacitorOnnx.run({
   modelId: 'demo-model',
   version: '1.0.0',
-  audioData: [0.1, 0.2, 0.3, 0.4],
+  inputTensor: {
+    type: 'float32',
+    dims: [1, 4],
+    data: [0.1, 0.2, 0.3, 0.4],
+  },
 });
 
 console.log(result.logits.dims, result.logits.data.length);
@@ -52,7 +56,12 @@ await clearModel({ modelId: 'demo-model', version: '1.0.0' });
 
 - `loadModel` supports optional `sha256` for integrity verification.
 - `loadModel` supports optional `warmup` (`true`) to warm the session right after loading.
-- `run` accepts normalized `audioData`; tensor conversion is handled by the SDK helper.
+- `loadModel.status` semantics are strict: `cache_hit` when loaded from valid cache, `downloaded` when network download is used.
+- `loadModel` returns `executionProviderUsed` with the provider that was actually initialized.
+- Web provider selection supports `sessionOptions.executionProvider` with `auto`, `wasm`, `webgpu`, `webnn` plus Android aliases (`cpu`/`nnapi` mapped to `wasm` in Web).
+- In Web `auto` mode, provider resolution tries accelerated providers first (`webgpu`, `webnn`) and falls back to `wasm`.
+- `run` accepts `inputTensor` and resolves model I/O names from session metadata (`inputNames`/`outputNames`) instead of hardcoded names.
+- Web runtime config is split by concern: [src/web-runtime-config.ts](src/web-runtime-config.ts) (global runtime/threads) and [src/web-provider-resolver.ts](src/web-provider-resolver.ts) (provider resolution and fallback).
 - Errors are normalized with structured fields (`code`, `message`, `retryable`, `correlationId`, `details`).
 
 ## Docs

@@ -37,10 +37,18 @@
     }
   },
   "peerDependencies": {
-    "@capacitor/core": ">=7.0.0"
+    "@capacitor/core": ">=7.0.0",
+    "onnxruntime-web": "^1.25.1"
+  },
+  "peerDependenciesMeta": {
+    "onnxruntime-web": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.14",
     "@capacitor/core": "^7.0.0",
+    "onnxruntime-web": "^1.25.1",
     "typescript": "^5.6.3"
   }
 }

@@ -45,11 +45,11 @@ export interface LoadModelResult {
   warmed?: boolean;
   warmupLatencyMs?: number;
   latencyMs: number;
-  executionProviderUsed?: "cpu" | "nnapi" | "wasm" | "webgpu" | "webnn";
+  executionProviderUsed?: "cpu" | "nnapi" | "coreml" | "wasm" | "webgpu" | "webnn";
 }
 
 export interface SessionOptionsInput {
-  executionProvider?: "cpu" | "nnapi" | "auto" | "wasm" | "webgpu" | "webnn";
+  executionProvider?: "cpu" | "nnapi" | "coreml" | "auto" | "wasm" | "webgpu" | "webnn";
   intraOpNumThreads?: number;
   interOpNumThreads?: number;
 }

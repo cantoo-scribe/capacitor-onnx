@@ -34,7 +34,7 @@ public class CapacitorOnnxPlugin: CAPPlugin {
 
         let sha256 = call.getString("sha256")
         let forceRedownload = call.getBool("forceRedownload") ?? false
-        let warmup = call.getBool("warmup") ?? false
+        let warmupInputJson = call.getObject("warmupInput")
         let sessionOptions = call.getObject("sessionOptions")
         let providerRaw = (sessionOptions?["executionProvider"] as? String ?? "auto").lowercased()
         let validProviders = ["cpu", "nnapi", "coreml", "auto", "wasm", "webgpu", "webnn"]
@@ -56,6 +56,17 @@ public class CapacitorOnnxPlugin: CAPPlugin {
             return
         }
 
+        let warmupInput: RawTensorInternal?
+        if let warmupInputJson = warmupInputJson {
+            guard let parsed = Self.parseWarmupInput(warmupInputJson) else {
+                rejectStructured(call, code: "INFERENCE_ERROR", message: "Invalid warmupInput: must include float32 data and positive dims")
+                return
+            }
+            warmupInput = parsed
+        } else {
+            warmupInput = nil
+        }
+
         let config = SessionConfig(executionProvider: providerRaw, intraOpNumThreads: intraOp, interOpNumThreads: interOp)
 
         Task {
@@ -69,9 +80,9 @@ public class CapacitorOnnxPlugin: CAPPlugin {
 
                 var warmupLatencyMs: Double? = nil
                 var warmed = false
-                if warmup {
+                if let warmupInput = warmupInput {
                     let warmupStart = currentTimeMs()
-                    try inferenceService.warmup(modelId: modelId, version: version)
+                    try inferenceService.warmup(modelId: modelId, version: version, warmupInput: warmupInput)
                     warmupLatencyMs = currentTimeMs() - warmupStart
                     warmed = true
                 }
@@ -231,5 +242,21 @@ public class CapacitorOnnxPlugin: CAPPlugin {
 
     private func currentTimeMs() -> Double {
         return Date().timeIntervalSince1970 * 1000
+    }
+
+    private static func parseWarmupInput(_ json: [String: Any]) -> RawTensorInternal? {
+        guard let type = json["type"] as? String, type == "float32" else { return nil }
+        guard let dataRaw = json["data"] as? [Any], let dimsRaw = json["dims"] as? [Any] else { return nil }
+
+        let data = dataRaw.compactMap { $0 as? Double }.map { Float($0) }
+        guard data.count == dataRaw.count else { return nil }
+
+        let dims = dimsRaw.compactMap { ($0 as? NSNumber)?.int64Value }
+        guard dims.count == dimsRaw.count, !dims.isEmpty, dims.allSatisfy({ $0 > 0 }) else { return nil }
+
+        let elementCount = dims.reduce(1, *)
+        guard elementCount == Int64(data.count) else { return nil }
+
+        return RawTensorInternal(data: data, dims: dims, type: type)
     }
 }

@@ -53,7 +53,7 @@ class CapacitorOnnxPlugin : Plugin() {
         val url = call.getString("url")
         val sha256 = call.getString("sha256")?.trim()?.takeIf { it.isNotEmpty() }
         val forceRedownload = call.getBoolean("forceRedownload", false) ?: false
-        val warmup = call.getBoolean("warmup", false) ?: false
+        val warmupInputJson = call.getObject("warmupInput")
         val sessionOptions = call.getObject("sessionOptions")
         val executionProvider = (sessionOptions?.optString("executionProvider", "auto") ?: "auto").lowercase()
 
@@ -94,6 +94,12 @@ class CapacitorOnnxPlugin : Plugin() {
             interOpNumThreads = interOpNumThreads,
         )
 
+        val warmupInput = parseWarmupInput(warmupInputJson)
+        if (warmupInputJson != null && warmupInput == null) {
+            rejectStructured(call, "INFERENCE_ERROR", "Invalid warmupInput: must include float32 data and positive dims")
+            return
+        }
+
         pluginScope.launch {
             try {
                 val startMs = System.currentTimeMillis()
@@ -105,9 +111,9 @@ class CapacitorOnnxPlugin : Plugin() {
                     forceRedownload = forceRedownload,
                     sessionConfig = sessionConfig,
                 )
-                val warmupLatencyMs = if (warmup) {
+                val warmupLatencyMs = if (warmupInput != null) {
                     val warmupStartMs = System.currentTimeMillis()
-                    inferenceService.warmup(modelId, version)
+                    inferenceService.warmup(modelId, version, warmupInput)
                     System.currentTimeMillis() - warmupStartMs
                 } else {
                     null
@@ -117,7 +123,7 @@ class CapacitorOnnxPlugin : Plugin() {
                     put("status", if (prepare.cacheHit) "cache_hit" else "downloaded")
                     put("sessionReady", true)
                     put("executionProviderUsed", prepare.executionProviderUsed)
-                    put("warmed", warmup)
+                    put("warmed", warmupInput != null)
                     warmupLatencyMs?.let { put("warmupLatencyMs", it) }
                     put("latencyMs", System.currentTimeMillis() - startMs)
                 }
@@ -126,6 +132,30 @@ class CapacitorOnnxPlugin : Plugin() {
                 rejectStructured(call, e)
             }
         }
+    }
+
+    private fun parseWarmupInput(json: JSObject?): RawTensorInternal? {
+        if (json == null) return null
+        val type = json.optString("type", "")
+        if (type != "float32") return null
+        val dataJson = json.optJSONArray("data") ?: return null
+        val dimsJson = json.optJSONArray("dims") ?: return null
+
+        val data = FloatArray(dataJson.length()) { i ->
+            dataJson.optDouble(i, Double.NaN).toFloat()
+        }
+        if (data.any { it.isNaN() }) return null
+
+        val dims = LongArray(dimsJson.length()) { i ->
+            dimsJson.optLong(i, -1L)
+        }
+        if (dims.isEmpty() || dims.any { it <= 0L }) return null
+
+        var elementCount = 1L
+        for (d in dims) elementCount *= d
+        if (elementCount != data.size.toLong()) return null
+
+        return RawTensorInternal(data = data, dims = dims, type = type)
     }
 
     @PluginMethod

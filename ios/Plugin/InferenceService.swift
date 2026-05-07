@@ -31,10 +31,12 @@ class InferenceService {
         return (cacheHit: modelRef.cacheHit, executionProviderUsed: sessionRef.executionProviderUsed)
     }
 
-    func warmup(modelId: String, version: String) throws {
+    func warmup(modelId: String, version: String, warmupInput: RawTensorInternal? = nil) throws {
         let modelRef = try modelStore.resolve(modelId: modelId, version: version)
         let sessionRef = try sessionManager.ensureSession(modelRef: modelRef)
-        try runWarmup(session: sessionRef.session)
+        if let warmupInput = warmupInput {
+            try runWarmup(session: sessionRef.session, warmupInput: warmupInput)
+        }
     }
 
     func run(
@@ -104,22 +106,25 @@ class InferenceService {
         return RawTensorInternal(data: floatData, dims: resolvedDims, type: "float32")
     }
 
-    private func runWarmup(session: ORTSession) throws {
+    private func runWarmup(session: ORTSession, warmupInput: RawTensorInternal) throws {
         let inputNames = try session.inputNames()
-        guard !inputNames.isEmpty else {
+        guard let inputName = inputNames.first else {
             throw OnnxPluginError.modelInvalid("model has no inputs to warm up")
         }
 
-        var feeds: [String: ORTValue] = [:]
-        for inputName in inputNames {
-            let dims: [NSNumber] = [1]
-            let data = NSMutableData(length: MemoryLayout<Float>.size) ?? NSMutableData()
-            if let tensor = try? ORTValue(tensorData: data, elementType: .float, shape: dims) {
-                feeds[inputName] = tensor
-            }
-        }
+        let nsDims = warmupInput.dims.map { NSNumber(value: $0) }
+        var dataCopy = warmupInput.data
+        let tensorData = NSMutableData(
+            bytes: &dataCopy,
+            length: dataCopy.count * MemoryLayout<Float>.size,
+        )
+        let tensor = try ORTValue(tensorData: tensorData, elementType: .float, shape: nsDims)
 
-        _ = try? session.run(withInputs: feeds, outputNames: Set(try session.outputNames()), runOptions: nil)
+        _ = try? session.run(
+            withInputs: [inputName: tensor],
+            outputNames: Set(try session.outputNames()),
+            runOptions: nil,
+        )
     }
 
     private func resolveOutputShape(totalValues: Int, shapeHint: [Int64]) -> [Int64] {

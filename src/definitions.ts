@@ -33,7 +33,7 @@ export interface LoadModelInput {
   version: string;
   url: string;
   sha256?: string;
-  warmup?: boolean;
+  warmupInput?: RawTensor;
   timeoutMs?: number;
   forceRedownload?: boolean;
   sessionOptions?: SessionOptionsInput;

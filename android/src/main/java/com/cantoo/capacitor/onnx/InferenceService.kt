@@ -42,9 +42,36 @@ class InferenceService(
         )
     }
 
-    suspend fun warmup(modelId: String, version: String) = withContext(Dispatchers.Default) {
+    suspend fun warmup(
+        modelId: String,
+        version: String,
+        warmupInput: RawTensorInternal? = null,
+    ) = withContext(Dispatchers.Default) {
         val modelRef = modelStore.resolve(modelId, version)
-        sessionManager.ensureSession(modelRef)
+        val sessionRef = sessionManager.ensureSession(modelRef)
+
+        if (warmupInput == null) {
+            return@withContext
+        }
+
+        val lock = perSessionLock.computeIfAbsent("$modelId::$version") { Mutex() }
+        lock.withLock {
+            val input = sessionRef.session.inputInfo.entries.firstOrNull()
+                ?: return@withLock
+            val env = sessionManager.ortEnvironment()
+            try {
+                val tensor = OnnxTensor.createTensor(
+                    env,
+                    FloatBuffer.wrap(warmupInput.data),
+                    warmupInput.dims,
+                )
+                tensor.use { t ->
+                    sessionRef.session.run(mapOf(input.key to t)).use { /* discard output */ }
+                }
+            } catch (_: Throwable) {
+                // best-effort warmup; surface failures via subsequent run() calls
+            }
+        }
     }
 
     suspend fun run(

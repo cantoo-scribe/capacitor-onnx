@@ -111,11 +111,10 @@ export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
     let warmed = false;
     let warmupLatencyMs: number | undefined;
 
-    if (_input.warmup) {
+    if (_input.warmupInput) {
       const warmupStartTime = nowMs();
-      await CapacitorOnnxWeb.warmupSession(session);
+      warmed = await CapacitorOnnxWeb.warmupSession(session, _input.warmupInput);
       warmupLatencyMs = elapsedMs(warmupStartTime);
-      warmed = true;
     }
 
     return {
@@ -233,83 +232,29 @@ export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
     await session.release();
   }
 
-  private static async warmupSession(session: ort.InferenceSession): Promise<void> {
-    if (!session.inputNames.length) {
-      throw new CapacitorOnnxError("MODEL_INVALID", "Model has no inputs to warm up.");
+  private static async warmupSession(
+    session: ort.InferenceSession,
+    warmupInput: RawTensor,
+  ): Promise<boolean> {
+    const inputName = session.inputNames[0];
+    if (!inputName) {
+      return false;
     }
 
-    const inputMetadata = (
-      session as unknown as {
-        inputMetadata?: Record<
-          string,
-          { dimensions?: readonly (number | string | null)[]; type?: string }
-        >;
-      }
-    ).inputMetadata;
-
-    const feeds: Record<string, ort.Tensor> = {};
-
-    for (const inputName of session.inputNames) {
-      const metadata = inputMetadata?.[inputName];
-      const dims = metadata?.dimensions?.length
-        ? metadata.dimensions.map((dim) =>
-            typeof dim === "number" && Number.isFinite(dim) && dim > 0 ? dim : 1,
-          )
-        : [1];
-      const type = metadata?.type ?? "float32";
-      const elementCount = dims.reduce((acc, dim) => acc * dim, 1);
-
-      switch (type) {
-        case "float64":
-          feeds[inputName] = new ort.Tensor(
-            "float64",
-            new Float64Array(elementCount),
-            dims,
-          );
-          break;
-        case "int8":
-          feeds[inputName] = new ort.Tensor("int8", new Int8Array(elementCount), dims);
-          break;
-        case "uint8":
-        case "bool":
-          feeds[inputName] = new ort.Tensor("uint8", new Uint8Array(elementCount), dims);
-          break;
-        case "int16":
-          feeds[inputName] = new ort.Tensor("int16", new Int16Array(elementCount), dims);
-          break;
-        case "uint16":
-          feeds[inputName] = new ort.Tensor("uint16", new Uint16Array(elementCount), dims);
-          break;
-        case "int32":
-          feeds[inputName] = new ort.Tensor("int32", new Int32Array(elementCount), dims);
-          break;
-        case "uint32":
-          feeds[inputName] = new ort.Tensor("uint32", new Uint32Array(elementCount), dims);
-          break;
-        case "int64":
-          feeds[inputName] = new ort.Tensor(
-            "int64",
-            Array.from({ length: elementCount }, () => 0n),
-            dims,
-          );
-          break;
-        case "uint64":
-          feeds[inputName] = new ort.Tensor(
-            "uint64",
-            Array.from({ length: elementCount }, () => 0n),
-            dims,
-          );
-          break;
-        default:
-          feeds[inputName] = new ort.Tensor(
-            "float32",
-            new Float32Array(elementCount),
-            dims,
-          );
-          break;
-      }
+    try {
+      const tensor = new ort.Tensor(
+        warmupInput.type,
+        warmupInput.data,
+        warmupInput.dims,
+      );
+      await session.run({ [inputName]: tensor });
+      return true;
+    } catch (err) {
+      console.warn(
+        "[CapacitorOnnxWeb] Warmup inference failed; continuing without warmup.",
+        err,
+      );
+      return false;
     }
-
-    await session.run(feeds);
   }
 }

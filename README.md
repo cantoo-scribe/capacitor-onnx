@@ -71,7 +71,7 @@ Host/iFrame bridge implementation is no longer part of this package and was move
 
 | Method | Signature | Purpose | Notes |
 | --- | --- | --- | --- |
-| `loadModel` | `(input: LoadModelInput) => Promise<LoadModelResult>` | Downloads (or reuses cached) model bytes, validates them, creates the inference session, and optionally warms it up. Must be called once per `modelId+version` before `run`. | `status` returns `cache_hit` or `downloaded`. Pass `sha256` to enforce integrity, `warmup: true` to pay first-inference cost upfront, `forceRedownload: true` to bypass cache, `timeoutMs` to bound the network fetch, and `sessionOptions` to pick the execution provider / thread counts. The result includes `executionProviderUsed`. |
+| `loadModel` | `(input: LoadModelInput) => Promise<LoadModelResult>` | Downloads (or reuses cached) model bytes, validates them, creates the inference session, and optionally warms it up. Must be called once per `modelId+version` before `run`. | `status` returns `cache_hit` or `downloaded`. Pass `sha256` to enforce integrity, `warmupInput` (a `RawTensor` matching one valid input shape) to pay first-inference cost upfront, `forceRedownload: true` to bypass cache, `timeoutMs` to bound the network fetch, and `sessionOptions` to pick the execution provider / thread counts. The result includes `executionProviderUsed`. |
 | `run` | `(input: RunInput) => Promise<RunResult>` | Runs inference on a previously loaded session. Resolves I/O names from session metadata, so the consumer only supplies `inputTensor`. | Calls to the same `modelId+version` are serialized by a per-session lock; different models run in parallel. Returns `{ logits, latencyMs }`. Pre/post-processing is the consumer's responsibility. |
 | `release` | `(input: ClearModelInput) => Promise<void>` | Releases the in-memory ONNX session for the given `modelId+version`. The cached file on disk is **kept**. | Use to free RAM/GPU memory when you are done with a model but expect to use it again later (next `loadModel` will hit the cache). |
 | `clearModel` | `(input: ClearModelInput) => Promise<ClearModelResult>` | Releases the session **and** removes the cached artifact for that `modelId+version` from disk / `cacheStorage`. | Returns `{ removed: boolean }`. Use when rotating a model version or invalidating a corrupted cache entry. |
@@ -108,7 +108,7 @@ await CapacitorOnnx.clearModel({ modelId: 'demo-model', version: '1.0.0' });
 ## Runtime Notes
 
 - `loadModel` supports optional `sha256` for integrity verification.
-- `loadModel` supports optional `warmup` (`true`) to warm the session right after loading.
+- `loadModel` supports optional `warmupInput: RawTensor` to pre-run the session with a sample tensor of the exact shape the model expects (e.g. `{ type: 'float32', dims: [1, 16000], data: [...] }`). Warmup is skipped when `warmupInput` is omitted.
 - `loadModel.status` semantics are strict: `cache_hit` when loaded from valid cache, `downloaded` when network download is used.
 - `loadModel` returns `executionProviderUsed` with the provider that was actually initialized.
 - Web provider selection supports `sessionOptions.executionProvider` with `auto`, `wasm`, `webgpu`, `webnn` plus native aliases (`cpu`/`nnapi`/`coreml` mapped to `wasm` in Web).

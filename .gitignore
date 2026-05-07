@@ -25,6 +25,10 @@ local.properties
 # Kotlin / Java
 *.class
 
+# iOS
+.build
+Package.resolved
+
 # IDEs
 .vscode/
 .idea/

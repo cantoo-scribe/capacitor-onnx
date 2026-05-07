@@ -44,10 +44,10 @@ Cross-Origin-Embedder-Policy: require-corp
 
 Plus, any cross-origin asset the page loads (model files, WASM artifacts, fonts, images) needs `Cross-Origin-Resource-Policy: cross-origin` (or `same-site`) on its response, otherwise it will be blocked under COEP. CDN/Storage hosting your `.onnx` artifacts must also send permissive **CORS** headers (`Access-Control-Allow-Origin`).
 
-Before calling `loadModel` on Web, configure the WASM path and cache backend:
+For Web-only hosts (without Capacitor), import from the dedicated Web entrypoint and configure WASM path/cache before `loadModel`:
 
 ```ts
-import { CapacitorOnnxWeb } from '@cantoo/capacitor-onnx';
+import { CapacitorOnnxWeb } from '@cantoo/capacitor-onnx/web';
 
 CapacitorOnnxWeb.setWebConfig({
   wasmPath: '/ort-wasm/',
@@ -62,6 +62,7 @@ Symptoms of missing isolation/CORS: `SharedArrayBuffer is not defined`, `Network
 The package exports:
 
 - `CapacitorOnnx`
+- `CapacitorOnnxWeb` (from `@cantoo/capacitor-onnx/web` for non-Capacitor hosts)
 - TypeScript interfaces from `definitions`
 
 Host/iFrame bridge implementation is no longer part of this package and was moved to a dedicated package.

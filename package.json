@@ -16,6 +16,12 @@
       "require": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./web": {
+      "types": "./dist/web/index.d.ts",
+      "import": "./dist/web/index.js",
+      "require": "./dist/web/index.js",
+      "default": "./dist/web/index.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -47,6 +53,9 @@
     "onnxruntime-web": "^1.25.1"
   },
   "peerDependenciesMeta": {
+    "@capacitor/core": {
+      "optional": true
+    },
     "onnxruntime-web": {
       "optional": true
     }

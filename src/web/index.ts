@@ -1,4 +1,3 @@
-import { WebPlugin } from "@capacitor/core";
 import * as ort from "onnxruntime-web";
 import type {
   CacheStorage,
@@ -45,7 +44,7 @@ function getSharedWebState(): SharedWebState {
   return globalScope[SHARED_WEB_STATE_KEY];
 }
 
-export class CapacitorOnnxWeb extends WebPlugin implements CapacitorOnnxPlugin {
+export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
   private sessions = new Map<string, ort.InferenceSession>();
   private knownModelKeys = new Set<string>();
 

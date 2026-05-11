@@ -100,10 +100,9 @@ class InferenceService {
         }
 
         let typeInfo = try outputValue.tensorTypeAndShapeInfo()
-        let shape = typeInfo.shape.map { $0.int64Value }
-        let resolvedDims = resolveOutputShape(totalValues: floatData.count, shapeHint: shape)
+        let dims = typeInfo.shape.map { $0.int64Value }
 
-        return RawTensorInternal(data: floatData, dims: resolvedDims, type: "float32")
+        return RawTensorInternal(data: floatData, dims: dims, type: "float32")
     }
 
     private func runWarmup(session: ORTSession, warmupInput: RawTensorInternal) throws {
@@ -125,34 +124,6 @@ class InferenceService {
             outputNames: Set(try session.outputNames()),
             runOptions: nil,
         )
-    }
-
-    private func resolveOutputShape(totalValues: Int, shapeHint: [Int64]) -> [Int64] {
-        if shapeHint.isEmpty {
-            return [Int64(totalValues)]
-        }
-
-        var knownProduct: Int64 = 1
-        var unknownCount = 0
-        for d in shapeHint {
-            if d <= 0 { unknownCount += 1 } else { knownProduct *= d }
-        }
-
-        if unknownCount == 0 && knownProduct == Int64(totalValues) {
-            return shapeHint
-        }
-
-        if unknownCount == 1 && knownProduct > 0 && Int64(totalValues) % knownProduct == 0 {
-            var resolved = shapeHint
-            let missing = Int64(totalValues) / knownProduct
-            for i in resolved.indices where resolved[i] <= 0 {
-                resolved[i] = missing
-                break
-            }
-            return resolved
-        }
-
-        return [1, Int64(totalValues)]
     }
 
     private func sessionLock(for modelId: String, version: String) -> NSLock {

@@ -56,6 +56,7 @@ Distributed via **Swift Package Manager** (`Package.swift`). There is no CocoaPo
 ### Key design decisions
 
 - The plugin contract is intentionally minimal: it receives a preprocessed `inputTensor` and returns raw `logits`. Pre/post-processing lives in the consumer app.
+- Output shape comes straight from ORT on every platform: Web reads `outputTensor.dims`, Android casts `result[0]` to `OnnxTensor` and reads `info.shape`, iOS calls `outputValue.tensorTypeAndShapeInfo().shape`. No heuristic shape resolution — if you ever need to reconstruct dims, prefer adding a new ORT API call over reintroducing inference-by-element-count logic.
 - Session concurrency: per-session mutex/lock allows parallel inference across different models, but queues calls to the same `modelId+version`.
 - Model integrity: download → temp file → SHA-256 check → atomic rename (Android and iOS). On Web, integrity is verified by creating and immediately releasing an `InferenceSession`.
 - `loadModel.status` is strict: `cache_hit` only when a valid cached artifact is reused; `downloaded` when a network fetch occurred.

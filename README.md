@@ -115,6 +115,7 @@ await CapacitorOnnx.clearModel({ modelId: 'demo-model', version: '1.0.0' });
 - In Web `auto` mode, provider resolution tries accelerated providers first (`webgpu`, `webnn`) and falls back to `wasm`.
 - iOS provider mapping: `cpu` → CPU, `nnapi`/`coreml` → CoreML, `auto` → CoreML with CPU fallback, web providers (`wasm`/`webgpu`/`webnn`) → CPU.
 - `run` accepts `inputTensor` and resolves model I/O names from session metadata (`inputNames`/`outputNames`) instead of hardcoded names.
+- **Output shape**: `RunResult.logits.dims` is the shape ORT materialized for the output tensor — Web reads `outputTensor.dims`, Android reads `OnnxTensor.info.shape`, iOS reads `tensorTypeAndShapeInfo().shape`. No heuristic, no symbolic dims (`-1`) in the result, no batch assumptions. Models with multiple independent dynamic axes are returned with their true runtime shape.
 - Web runtime config is split by concern: [src/web-runtime-config.ts](src/web-runtime-config.ts) (global runtime/threads) and [src/web-provider-resolver.ts](src/web-provider-resolver.ts) (provider resolution and fallback).
 - Errors are normalized with structured fields (`code`, `message`, `retryable`, `correlationId`, `details`).
 

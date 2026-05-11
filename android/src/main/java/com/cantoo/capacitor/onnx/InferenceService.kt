@@ -123,61 +123,22 @@ class InferenceService(
 
             val env = sessionManager.ortEnvironment()
             val tensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(inputTensorData), inputTensorDims)
-            val outputShapeHint = resolveOutputShapeHint(sessionRef.session)
 
             tensor.use { t ->
                 sessionRef.session.run(mapOf(input.key to t)).use { result ->
-                    val logits = flattenToFloatArray(result[0].value)
+                    val outputValue = result[0]
+                    val outputTensor = outputValue as? OnnxTensor
+                        ?: throw IllegalStateException("INFERENCE_ERROR: model output is not a tensor")
+                    val dims = outputTensor.info.shape
+                    val logits = flattenToFloatArray(outputValue.value)
                     return@withLock RawTensorInternal(
                         data = logits,
-                        dims = resolveOutputShape(logits.size, outputShapeHint),
+                        dims = dims,
                         type = "float32",
                     )
                 }
             }
         }
-    }
-
-    private fun resolveOutputShapeHint(session: ai.onnxruntime.OrtSession): LongArray {
-        val output = session.outputInfo.entries.firstOrNull()
-            ?: return longArrayOf(-1)
-        val info = output.value.info as? TensorInfo
-            ?: return longArrayOf(-1)
-        return info.shape
-    }
-
-    private fun resolveOutputShape(totalValues: Int, shapeHint: LongArray): LongArray {
-        if (shapeHint.isEmpty()) {
-            return longArrayOf(totalValues.toLong())
-        }
-
-        var knownProduct = 1L
-        var unknownCount = 0
-        for (d in shapeHint) {
-            if (d <= 0L) {
-                unknownCount += 1
-            } else {
-                knownProduct *= d
-            }
-        }
-
-        if (unknownCount == 0 && knownProduct == totalValues.toLong()) {
-            return shapeHint
-        }
-
-        if (unknownCount == 1 && knownProduct > 0L && totalValues % knownProduct.toInt() == 0) {
-            val resolved = shapeHint.copyOf()
-            val missing = (totalValues / knownProduct).toLong()
-            for (i in resolved.indices) {
-                if (resolved[i] <= 0L) {
-                    resolved[i] = missing
-                    break
-                }
-            }
-            return resolved
-        }
-
-        return longArrayOf(1L, totalValues.toLong())
     }
 
     private fun flattenToFloatArray(value: Any?): FloatArray {

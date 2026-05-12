@@ -1,9 +1,9 @@
 {
   "name": "@cantoo/capacitor-onnx",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "repository": "https://github.com/cantoo-scribe/capacitor-onnx.git",
   "homepage": "https://github.com/cantoo-scribe/capacitor-onnx#readme",
-  "description": "Capacitor plugin for native ONNX Runtime inference on Android",
+  "description": "Capacitor plugin for native ONNX Runtime inference on Android, iOS and Web",
   "packageManager": "pnpm@10.30.3",
   "type": "module",
   "main": "./dist/index.js",
@@ -29,6 +29,7 @@
     "android/build.gradle",
     "ios/Plugin",
     "Package.swift",
+    "CapacitorOnnx.podspec",
     "dist"
   ],
   "scripts": {
@@ -44,6 +45,9 @@
   ],
   "license": "MIT",
   "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
     "android": {
       "src": "android"
     }

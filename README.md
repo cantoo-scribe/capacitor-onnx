@@ -23,15 +23,15 @@ The `com.microsoft.onnxruntime:onnxruntime-android` dependency is bundled by the
 
 ### iOS setup
 
-iOS is distributed via **Swift Package Manager**. The `onnxruntime` dependency is not published on CocoaPods, so you must integrate the plugin through SPM:
+iOS supports both **CocoaPods** (default for Capacitor apps) and **Swift Package Manager**.
 
-1. After `pnpm cap sync ios`, open `ios/App/App.xcworkspace` in Xcode.
-2. Select the **App** project → **Package Dependencies** → **+**.
-3. Add the local package by pointing to the plugin folder: `node_modules/@cantoo/capacitor-onnx` (or the absolute path on disk). Xcode resolves [`onnxruntime-swift-package-manager`](https://github.com/microsoft/onnxruntime-swift-package-manager) transitively.
-4. Add the **CapacitorOnnx** product to the **App** target.
-5. Minimum deployment target: **iOS 14**.
+**CocoaPods (recommended for Capacitor apps).** `pnpm cap sync ios` registers the plugin automatically: the generated `Podfile` picks up `CapacitorOnnx.podspec` from `node_modules/@cantoo/capacitor-onnx`, and `pod install` resolves [`onnxruntime-objc`](https://cocoapods.org/pods/onnxruntime-objc) transitively. No manual Xcode steps are required.
 
-The native bridge is registered automatically via `CapacitorOnnxPlugin.m`; no additional Swift code is required.
+**Swift Package Manager (alternative).** If the host app prefers SPM, skip the Podfile entry and add the plugin as a local package in Xcode (**Package Dependencies → +**, pointing to `node_modules/@cantoo/capacitor-onnx`). Xcode resolves [`onnxruntime-swift-package-manager`](https://github.com/microsoft/onnxruntime-swift-package-manager) transitively. Add the **CapacitorOnnx** product to the **App** target.
+
+Requirements either way:
+- Minimum deployment target: **iOS 14**.
+- The native bridge is registered automatically via `CapacitorOnnxPlugin.m`; no additional Swift code is required.
 
 ### Web setup
 

@@ -45,7 +45,7 @@ This is a Capacitor plugin that exposes ONNX Runtime inference to JavaScript app
 
 ### iOS (`ios/Plugin/`)
 
-Distributed via **Swift Package Manager** (`Package.swift`). There is no CocoaPods podspec — `onnxruntime` is not published on CocoaPods. Consumers add the plugin as an SPM package in Xcode, which resolves `onnxruntime-swift-package-manager` automatically.
+Distributed via both **CocoaPods** (`CapacitorOnnx.podspec` at the repo root, picked up by `cap sync ios`; depends on `onnxruntime-objc`) and **Swift Package Manager** (`Package.swift`, depends on `onnxruntime-swift-package-manager`). The two integrations coexist — host apps use CocoaPods by default; SPM is available for apps that opt out of the Podfile. Both pin to the 1.24.x ORT family.
 
 - **`CapacitorOnnxPlugin.swift`** — `@objc(CapacitorOnnxPlugin)` Capacitor plugin bridge; validates input, dispatches async Tasks, rejects with structured errors.
 - **`CapacitorOnnxPlugin.m`** — ObjC `CAP_PLUGIN` macro registration.

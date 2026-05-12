@@ -29,7 +29,7 @@
     "android/build.gradle",
     "ios/Plugin",
     "Package.swift",
-    "CapacitorOnnx.podspec",
+    "CantooCapacitorOnnx.podspec",
     "dist"
   ],
   "scripts": {

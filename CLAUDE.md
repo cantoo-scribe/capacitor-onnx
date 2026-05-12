@@ -14,7 +14,7 @@ There are no automated tests in this repo. Manual testing flows are documented i
 ### Publishing
 
 ```bash
-npm version patch   # or minor/major — also updates CapacitorOnnx.podspec automatically via package.json
+npm version patch   # or minor/major — also updates CantooCapacitorOnnx.podspec automatically via package.json
 pnpm build
 pnpm typecheck
 pnpm pack --dry-run
@@ -45,7 +45,7 @@ This is a Capacitor plugin that exposes ONNX Runtime inference to JavaScript app
 
 ### iOS (`ios/Plugin/`)
 
-Distributed via both **CocoaPods** (`CapacitorOnnx.podspec` at the repo root, picked up by `cap sync ios`; depends on `onnxruntime-objc`) and **Swift Package Manager** (`Package.swift`, depends on `onnxruntime-swift-package-manager`). The two integrations coexist — host apps use CocoaPods by default; SPM is available for apps that opt out of the Podfile. Both pin to the 1.24.x ORT family.
+Distributed via both **CocoaPods** (`CantooCapacitorOnnx.podspec` at the repo root, picked up by `cap sync ios`; depends on `onnxruntime-objc`) and **Swift Package Manager** (`Package.swift`, library name `CantooCapacitorOnnx`, depends on `onnxruntime-swift-package-manager`). Both channels expose the same product name `CantooCapacitorOnnx` (matching what the Capacitor CLI derives from the npm package name `@cantoo/capacitor-onnx`). The SPM target is still `CapacitorOnnxPlugin` internally — that's the Swift module name, but Capacitor discovers the plugin via the ObjC runtime (`CAP_PLUGIN` macro), so host apps never `import` it. The two integrations coexist — host apps use CocoaPods by default; SPM is available for apps that opt out of the Podfile. Both pin to the 1.24.x ORT family.
 
 - **`CapacitorOnnxPlugin.swift`** — `@objc(CapacitorOnnxPlugin)` Capacitor plugin bridge; validates input, dispatches async Tasks, rejects with structured errors.
 - **`CapacitorOnnxPlugin.m`** — ObjC `CAP_PLUGIN` macro registration.

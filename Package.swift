@@ -2,11 +2,11 @@
 import PackageDescription
 
 let package = Package(
-    name: "CapacitorOnnx",
+    name: "CantooCapacitorOnnx",
     platforms: [.iOS(.v14)],
     products: [
         .library(
-            name: "CapacitorOnnx",
+            name: "CantooCapacitorOnnx",
             targets: ["CapacitorOnnxPlugin"]
         )
     ],

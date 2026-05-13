@@ -2,11 +2,9 @@ import { WebPlugin } from "@capacitor/core";
 
 import type {
   CapacitorOnnxPlugin,
-  ClearAllCacheResult,
-  ClearModelInput,
-  ClearModelResult,
   LoadModelInput,
   LoadModelResult,
+  ReleaseModelInput,
   RunInput,
   RunResult,
 } from "../definitions";
@@ -23,15 +21,7 @@ export class WrapperCapacitorOnnxWeb extends WebPlugin implements CapacitorOnnxP
     return await this.engine.run(input);
   }
 
-  async release(input: ClearModelInput): Promise<void> {
+  async release(input: ReleaseModelInput): Promise<void> {
     await this.engine.release(input);
-  }
-
-  async clearModel(input: ClearModelInput): Promise<ClearModelResult> {
-    return await this.engine.clearModel(input);
-  }
-
-  async clearAllCache(): Promise<ClearAllCacheResult> {
-    return await this.engine.clearAllCache();
   }
 }

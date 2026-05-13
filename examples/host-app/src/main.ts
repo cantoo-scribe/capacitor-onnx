@@ -10,11 +10,11 @@ type AssertionResult = {
   details?: unknown;
 };
 
-type InferenceSuccessConfig = {
+type LoadConfig = {
   modelId: string;
   version: string;
-  url: string;
-  sha256?: string;
+  filePath?: string;
+  modelUrl?: string;
 };
 
 type RunInferenceConfig = {
@@ -85,6 +85,8 @@ if (!app) {
   throw new Error("Failed to find app root element");
 }
 
+const isWebPlatform = Capacitor.getPlatform() === "web";
+
 app.innerHTML = `
   <main class="container">
     <h1>Capacitor ONNX Host</h1>
@@ -112,12 +114,15 @@ app.innerHTML = `
           <input id="input-version" value="1.0.0" />
         </label>
         <label class="wide">
-          Model URL
-          <input id="input-url" placeholder="https://.../model.onnx" />
-        </label>
-        <label class="wide">
-          Model SHA-256
-          <input id="input-sha256" placeholder="64 hex chars" />
+          ${
+            isWebPlatform
+              ? "Model URL (web fetches bytes)"
+              : "Native filePath (absolute or file://)"
+          }
+          <input
+            id="input-model-source"
+            placeholder="${isWebPlatform ? "https://.../model.onnx" : "/absolute/path/to/model.onnx"}"
+          />
         </label>
         <label class="wide">
           Normalized input (CSV)
@@ -144,8 +149,7 @@ app.innerHTML = `
       <button id="btn-load-model">Load model</button>
       <button id="btn-success-e2e">Run inference</button>
       <button id="btn-error-e2e">Run error E2E</button>
-      <button id="btn-clear-model-cache">Clear model cache</button>
-      <button id="btn-clear-all-cache">Clear all cache</button>
+      <button id="btn-release-model">Release model</button>
     </section>
     <section>
       <h2>Output</h2>
@@ -221,10 +225,6 @@ function validateNormalizedAudioLength(values: number[]) {
   }
 }
 
-function product(values: readonly number[]): number {
-  return values.reduce((acc, current) => acc * current, 1);
-}
-
 function normalizePluginError(error: unknown): NormalizedPluginError {
   const asRecord = (value: unknown): Record<string, unknown> | undefined => {
     if (typeof value === "object" && value !== null) {
@@ -274,8 +274,7 @@ function assertion(name: string, ok: boolean, details?: unknown): AssertionResul
 function getFormFields() {
   const modelIdInput = document.querySelector<HTMLInputElement>("#input-model-id");
   const versionInput = document.querySelector<HTMLInputElement>("#input-version");
-  const urlInput = document.querySelector<HTMLInputElement>("#input-url");
-  const shaInput = document.querySelector<HTMLInputElement>("#input-sha256");
+  const sourceInput = document.querySelector<HTMLInputElement>("#input-model-source");
   const normalizedInput = document.querySelector<HTMLTextAreaElement>(
     "#input-normalized-data",
   );
@@ -297,8 +296,7 @@ function getFormFields() {
   if (
     !modelIdInput ||
     !versionInput ||
-    !urlInput ||
-    !shaInput ||
+    !sourceInput ||
     !normalizedInput ||
     !mockSampleRateInput ||
     !mockDurationInput ||
@@ -313,8 +311,7 @@ function getFormFields() {
   return {
     modelIdInput,
     versionInput,
-    urlInput,
-    shaInput,
+    sourceInput,
     normalizedInput,
     mockSampleRateInput,
     mockDurationInput,
@@ -339,29 +336,28 @@ function applyPreset(presetId: string) {
   writeOutput({
     operation: "apply-preset",
     preset: preset.label,
-    note: "Preset applied. Fill model URL and (optionally) SHA-256, then click Load model and Run inference.",
+    note: isWebPlatform
+      ? "Preset applied. Fill model URL, then click Load model and Run inference."
+      : "Preset applied. Fill the native filePath, then click Load model and Run inference.",
   });
 }
 
-function getLoadConfigFromForm(): InferenceSuccessConfig {
-  const { modelIdInput, versionInput, urlInput, shaInput } = getFormFields();
+function getLoadConfigFromForm(): LoadConfig {
+  const { modelIdInput, versionInput, sourceInput } = getFormFields();
 
   const modelId = modelIdInput.value.trim();
   const version = versionInput.value.trim();
-  const url = urlInput.value.trim();
-  const sha256Raw = shaInput.value.trim();
-  const sha256 = sha256Raw.length > 0 ? sha256Raw : undefined;
+  const source = sourceInput.value.trim();
 
-  if (!modelId || !version || !url) {
-    throw new Error("modelId, version and url are required to load model");
+  if (!modelId || !version || !source) {
+    throw new Error("modelId, version and model source are required to load model");
   }
 
-  return {
-    modelId,
-    version,
-    url,
-    sha256,
-  };
+  if (isWebPlatform) {
+    return { modelId, version, modelUrl: source };
+  }
+
+  return { modelId, version, filePath: source };
 }
 
 function getRunConfigFromForm(): RunInferenceConfig {
@@ -383,18 +379,14 @@ function getRunConfigFromForm(): RunInferenceConfig {
   };
 }
 
-function getModelLoadKey(config: InferenceSuccessConfig): string {
-  return `${config.modelId}::${config.version}::${config.url}::${config.sha256 ?? ""}`;
+function getModelLoadKey(config: LoadConfig): string {
+  return `${config.modelId}::${config.version}::${config.modelUrl ?? config.filePath ?? ""}`;
 }
 
 const loadModelButton = document.querySelector<HTMLButtonElement>("#btn-load-model");
 const successE2EButton = document.querySelector<HTMLButtonElement>("#btn-success-e2e");
 const errorE2EButton = document.querySelector<HTMLButtonElement>("#btn-error-e2e");
-const clearModelCacheButton = document.querySelector<HTMLButtonElement>(
-  "#btn-clear-model-cache",
-);
-const clearAllCacheButton =
-  document.querySelector<HTMLButtonElement>("#btn-clear-all-cache");
+const releaseModelButton = document.querySelector<HTMLButtonElement>("#btn-release-model");
 const presetSelect = document.querySelector<HTMLSelectElement>("#input-preset");
 const applyPresetButton = document.querySelector<HTMLButtonElement>("#btn-apply-preset");
 const generateMockAudioButton = document.querySelector<HTMLButtonElement>(
@@ -405,8 +397,7 @@ if (
   !loadModelButton ||
   !successE2EButton ||
   !errorE2EButton ||
-  !clearModelCacheButton ||
-  !clearAllCacheButton ||
+  !releaseModelButton ||
   !presetSelect ||
   !applyPresetButton ||
   !generateMockAudioButton
@@ -418,8 +409,7 @@ const actionButtons = [
   loadModelButton,
   successE2EButton,
   errorE2EButton,
-  clearModelCacheButton,
-  clearAllCacheButton,
+  releaseModelButton,
   applyPresetButton,
   generateMockAudioButton,
 ];
@@ -435,9 +425,18 @@ function setModelLoading(loading: boolean) {
   setActionButtonsDisabled(loading);
 }
 
-async function ensureModelPrepared(
-  config: InferenceSuccessConfig,
-): Promise<LoadModelResult> {
+async function fetchModelBuffer(url: string): Promise<Uint8Array> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch model from URL: ${url}. Status: ${response.status} ${response.statusText}`,
+    );
+  }
+  const buffer = await response.arrayBuffer();
+  return new Uint8Array(buffer);
+}
+
+async function ensureModelPrepared(config: LoadConfig): Promise<LoadModelResult> {
   const key = getModelLoadKey(config);
   const existing = loadModelInFlight.get(key);
   if (existing) {
@@ -445,13 +444,28 @@ async function ensureModelPrepared(
   }
 
   setModelLoading(true);
-  const preparePromise = CapacitorOnnx.loadModel({
-    modelId: config.modelId,
-    version: config.version,
-    url: config.url,
-    forceRedownload: true,
-    ...(config.sha256 ? { sha256: config.sha256 } : {}),
-  });
+  const preparePromise = (async () => {
+    if (isWebPlatform) {
+      if (!config.modelUrl) {
+        throw new Error("modelUrl is required on web");
+      }
+      const modelBuffer = await fetchModelBuffer(config.modelUrl);
+      return CapacitorOnnx.loadModel({
+        modelId: config.modelId,
+        version: config.version,
+        modelBuffer,
+      });
+    }
+
+    if (!config.filePath) {
+      throw new Error("filePath is required on native");
+    }
+    return CapacitorOnnx.loadModel({
+      modelId: config.modelId,
+      version: config.version,
+      filePath: config.filePath,
+    });
+  })();
 
   loadModelInFlight.set(key, preparePromise);
   try {
@@ -584,7 +598,7 @@ successE2EButton.addEventListener("click", async () => {
   }
 });
 
-clearModelCacheButton.addEventListener("click", async () => {
+releaseModelButton.addEventListener("click", async () => {
   if (isModelLoading) {
     return;
   }
@@ -595,44 +609,23 @@ clearModelCacheButton.addEventListener("click", async () => {
     const version = versionInput.value.trim();
 
     if (!modelId || !version) {
-      throw new Error("modelId and version are required to clear model cache");
+      throw new Error("modelId and version are required to release the model session");
     }
 
-    const result = await CapacitorOnnx.clearModel({
+    await CapacitorOnnx.release({
       modelId,
       version,
     });
 
     writeOutput({
       platform: Capacitor.getPlatform(),
-      operation: "clear-model-cache",
-      result,
+      operation: "release-model",
+      result: { released: true, modelId, version },
     });
   } catch (error) {
     writeOutput({
       platform: Capacitor.getPlatform(),
-      operation: "clear-model-cache",
-      error: normalizePluginError(error),
-    });
-  }
-});
-
-clearAllCacheButton.addEventListener("click", async () => {
-  if (isModelLoading) {
-    return;
-  }
-
-  try {
-    const result = await CapacitorOnnx.clearAllCache();
-    writeOutput({
-      platform: Capacitor.getPlatform(),
-      operation: "clear-all-cache",
-      result,
-    });
-  } catch (error) {
-    writeOutput({
-      platform: Capacitor.getPlatform(),
-      operation: "clear-all-cache",
+      operation: "release-model",
       error: normalizePluginError(error),
     });
   }

@@ -10,7 +10,6 @@ function generateCorrelationId(): string {
 
 function isRetryable(code: PluginErrorCode): boolean {
   switch (code) {
-    case "NETWORK_ERROR":
     case "TIMEOUT":
     case "CANCELED":
     case "SESSION_INIT_ERROR":

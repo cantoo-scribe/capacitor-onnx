@@ -1,5 +1,6 @@
 package com.cantoo.capacitor.onnx
 
+import android.net.Uri
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -18,7 +19,6 @@ import java.util.UUID
 class CapacitorOnnxPlugin : Plugin() {
     private val pluginScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    private lateinit var modelStore: ModelStore
     private lateinit var sessionManager: SessionManager
     private lateinit var inferenceService: InferenceService
 
@@ -29,10 +29,8 @@ class CapacitorOnnxPlugin : Plugin() {
 
     override fun load() {
         super.load()
-        val root = File(context.filesDir, "capacitor_onnx")
-        modelStore = ModelStore(context, root)
         sessionManager = SessionManager()
-        inferenceService = InferenceService(sessionManager, modelStore)
+        inferenceService = InferenceService(sessionManager)
     }
 
     override fun handleOnDestroy() {
@@ -50,9 +48,7 @@ class CapacitorOnnxPlugin : Plugin() {
     fun loadModel(call: PluginCall) {
         val modelId = call.getString("modelId")
         val version = call.getString("version")
-        val url = call.getString("url")
-        val sha256 = call.getString("sha256")?.trim()?.takeIf { it.isNotEmpty() }
-        val forceRedownload = call.getBoolean("forceRedownload", false) ?: false
+        val rawFilePath = call.getString("filePath")
         val warmupInputJson = call.getObject("warmupInput")
         val sessionOptions = call.getObject("sessionOptions")
         val executionProvider = (sessionOptions?.optString("executionProvider", "auto") ?: "auto").lowercase()
@@ -68,8 +64,24 @@ class CapacitorOnnxPlugin : Plugin() {
             null
         }
 
-        if (modelId == null || version == null || url == null) {
-            rejectStructured(call, "INFERENCE_ERROR", "Missing required fields: modelId, version, url")
+        if (modelId == null || version == null) {
+            rejectStructured(call, "INFERENCE_ERROR", "Missing required fields: modelId, version")
+            return
+        }
+
+        if (call.data.has("modelBuffer")) {
+            rejectStructured(call, "MODEL_INVALID", "modelBuffer is not supported on Android; pass filePath (file:// URI or absolute path) instead")
+            return
+        }
+
+        if (rawFilePath.isNullOrBlank()) {
+            rejectStructured(call, "MODEL_INVALID", "Expected exactly one of filePath or modelBuffer")
+            return
+        }
+
+        val resolvedPath = resolveFilePath(rawFilePath)
+        if (!File(resolvedPath).exists()) {
+            rejectStructured(call, "MODEL_INVALID", "Model file not found at filePath: $rawFilePath")
             return
         }
 
@@ -103,12 +115,10 @@ class CapacitorOnnxPlugin : Plugin() {
         pluginScope.launch {
             try {
                 val startMs = System.currentTimeMillis()
-                val prepare = inferenceService.prepareModel(
+                val executionProviderUsed = inferenceService.prepareModel(
                     modelId = modelId,
                     version = version,
-                    url = url,
-                    sha256 = sha256,
-                    forceRedownload = forceRedownload,
+                    filePath = resolvedPath,
                     sessionConfig = sessionConfig,
                 )
                 val warmupLatencyMs = if (warmupInput != null) {
@@ -120,9 +130,8 @@ class CapacitorOnnxPlugin : Plugin() {
                 }
 
                 val result = JSObject().apply {
-                    put("status", if (prepare.cacheHit) "cache_hit" else "downloaded")
                     put("sessionReady", true)
-                    put("executionProviderUsed", prepare.executionProviderUsed)
+                    put("executionProviderUsed", executionProviderUsed)
                     put("warmed", warmupInput != null)
                     warmupLatencyMs?.let { put("warmupLatencyMs", it) }
                     put("latencyMs", System.currentTimeMillis() - startMs)
@@ -156,31 +165,6 @@ class CapacitorOnnxPlugin : Plugin() {
         if (elementCount != data.size.toLong()) return null
 
         return RawTensorInternal(data = data, dims = dims, type = type)
-    }
-
-    @PluginMethod
-    fun warmupModel(call: PluginCall) {
-        val modelId = call.getString("modelId")
-        val version = call.getString("version")
-
-        if (modelId == null || version == null) {
-            rejectStructured(call, "INFERENCE_ERROR", "Missing required fields: modelId, version")
-            return
-        }
-
-        pluginScope.launch {
-            try {
-                val startMs = System.currentTimeMillis()
-                inferenceService.warmup(modelId, version)
-                val result = JSObject().apply {
-                    put("warmed", true)
-                    put("latencyMs", System.currentTimeMillis() - startMs)
-                }
-                call.resolve(result)
-            } catch (e: Throwable) {
-                rejectStructured(call, e)
-            }
-        }
     }
 
     @PluginMethod
@@ -253,53 +237,6 @@ class CapacitorOnnxPlugin : Plugin() {
     }
 
     @PluginMethod
-    fun getModelStatus(call: PluginCall) {
-        val modelId = call.getString("modelId")
-        val version = call.getString("version")
-
-        if (modelId == null || version == null) {
-            rejectStructured(call, "INFERENCE_ERROR", "Missing required fields: modelId, version")
-            return
-        }
-
-        pluginScope.launch {
-            try {
-                val status = modelStore.getModelStatus(modelId, version)
-                val result = JSObject().apply {
-                    put("exists", status.exists)
-                    put("integrityOk", status.integrityOk)
-                    put("sessionLoaded", sessionManager.hasSession(modelId, version))
-                    status.sizeBytes?.let { put("sizeBytes", it) }
-                }
-                call.resolve(result)
-            } catch (e: Throwable) {
-                rejectStructured(call, e)
-            }
-        }
-    }
-
-    @PluginMethod
-    fun clearModel(call: PluginCall) {
-        val modelId = call.getString("modelId")
-        val version = call.getString("version")
-
-        if (modelId == null || version == null) {
-            rejectStructured(call, "INFERENCE_ERROR", "Missing required fields: modelId, version")
-            return
-        }
-
-        pluginScope.launch {
-            try {
-                sessionManager.closeSession(modelId, version)
-                val removed = modelStore.clearModel(modelId, version)
-                call.resolve(JSObject().apply { put("removed", removed) })
-            } catch (e: Throwable) {
-                rejectStructured(call, e)
-            }
-        }
-    }
-
-    @PluginMethod
     fun release(call: PluginCall) {
         val modelId = call.getString("modelId")
         val version = call.getString("version")
@@ -319,26 +256,11 @@ class CapacitorOnnxPlugin : Plugin() {
         }
     }
 
-    @PluginMethod
-    fun clearAllCache(call: PluginCall) {
-        pluginScope.launch {
-            try {
-                sessionManager.closeAll()
-                val removedModels = modelStore.clearAll()
-                call.resolve(JSObject().apply { put("removedModels", removedModels) })
-            } catch (e: Throwable) {
-                rejectStructured(call, e)
-            }
+    private fun resolveFilePath(raw: String): String {
+        if (raw.startsWith("file://")) {
+            return Uri.parse(raw).path ?: raw
         }
-    }
-
-    @PluginMethod
-    fun getDiagnostics(call: PluginCall) {
-        val result = JSObject().apply {
-            put("activeSessions", sessionManager.activeSessionCount())
-            put("cacheEntries", modelStore.cacheEntryCount())
-        }
-        call.resolve(result)
+        return raw
     }
 
     private fun rejectStructured(call: PluginCall, error: Throwable) {
@@ -381,8 +303,6 @@ class CapacitorOnnxPlugin : Plugin() {
 
     private fun isKnownErrorCode(code: String): Boolean {
         return when (code) {
-            "NETWORK_ERROR",
-            "INTEGRITY_ERROR",
             "MODEL_INVALID",
             "SESSION_INIT_ERROR",
             "INFERENCE_ERROR",
@@ -395,7 +315,7 @@ class CapacitorOnnxPlugin : Plugin() {
 
     private fun isRetryable(code: String): Boolean {
         return when (code) {
-            "NETWORK_ERROR", "TIMEOUT", "CANCELED", "SESSION_INIT_ERROR" -> true
+            "TIMEOUT", "CANCELED", "SESSION_INIT_ERROR" -> true
             else -> false
         }
     }

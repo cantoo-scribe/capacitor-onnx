@@ -5,7 +5,7 @@ import { CapacitorOnnxError } from "../errors";
 export type WebExecutionProvider = "wasm" | "webgpu" | "webnn";
 
 export async function createSessionWithFallback(
-  model: ArrayBuffer,
+  model: Uint8Array,
   requestedProvider: SessionOptionsInput["executionProvider"] | undefined,
 ): Promise<{ session: ort.InferenceSession; providerUsed: WebExecutionProvider }> {
   const candidates = resolveProviderCandidates(requestedProvider);

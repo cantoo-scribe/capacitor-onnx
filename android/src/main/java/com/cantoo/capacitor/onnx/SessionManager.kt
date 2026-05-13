@@ -31,14 +31,12 @@ data class SessionRef(
 class SessionManager {
     private val environment: OrtEnvironment = OrtEnvironment.getEnvironment()
     private val sessions = ConcurrentHashMap<String, SessionRef>()
-    private val desiredConfigs = ConcurrentHashMap<String, SessionConfig>()
 
     fun ortEnvironment(): OrtEnvironment = environment
 
-    fun ensureSession(modelRef: ModelRef, config: SessionConfig? = null): SessionRef {
-        val key = key(modelRef.modelId, modelRef.version)
-        val normalized = (config?.normalized() ?: desiredConfigs[key] ?: SessionConfig()).normalized()
-        desiredConfigs[key] = normalized
+    fun ensureSession(modelId: String, version: String, filePath: String, config: SessionConfig): SessionRef {
+        val key = key(modelId, version)
+        val normalized = config.normalized()
 
         synchronized(this) {
             val existing = sessions[key]
@@ -51,60 +49,52 @@ class SessionManager {
                 sessions.remove(key)
             }
 
-            val created = createSession(modelRef, normalized)
+            val created = createSession(modelId, version, filePath, normalized)
             sessions[key] = created
             return created
         }
     }
 
-    fun executionProviderUsed(modelId: String, version: String): String? {
-        return sessions[key(modelId, version)]?.executionProviderUsed
-    }
-
-    fun hasSession(modelId: String, version: String): Boolean = sessions.containsKey(key(modelId, version))
+    fun getSession(modelId: String, version: String): SessionRef? = sessions[key(modelId, version)]
 
     fun closeSession(modelId: String, version: String) {
-        desiredConfigs.remove(key(modelId, version))
         sessions.remove(key(modelId, version))?.session?.close()
     }
 
     fun closeAll() {
         sessions.values.forEach { it.session.close() }
         sessions.clear()
-        desiredConfigs.clear()
     }
 
-    fun activeSessionCount(): Int = sessions.size
-
-    private fun createSession(modelRef: ModelRef, config: SessionConfig): SessionRef {
+    private fun createSession(modelId: String, version: String, filePath: String, config: SessionConfig): SessionRef {
         return when (config.executionProvider) {
-            "cpu" -> createCpuSession(modelRef, config)
-            "nnapi" -> createNnapiSession(modelRef, config)
-            else -> createAutoSession(modelRef, config)
+            "cpu" -> createCpuSession(modelId, version, filePath, config)
+            "nnapi" -> createNnapiSession(modelId, version, filePath, config)
+            else -> createAutoSession(modelId, version, filePath, config)
         }
     }
 
-    private fun createAutoSession(modelRef: ModelRef, config: SessionConfig): SessionRef {
+    private fun createAutoSession(modelId: String, version: String, filePath: String, config: SessionConfig): SessionRef {
         return try {
-            createNnapiSession(modelRef, config)
+            createNnapiSession(modelId, version, filePath, config)
         } catch (_: Throwable) {
-            createCpuSession(modelRef, config)
+            createCpuSession(modelId, version, filePath, config)
         }
     }
 
-    private fun createNnapiSession(modelRef: ModelRef, config: SessionConfig): SessionRef {
+    private fun createNnapiSession(modelId: String, version: String, filePath: String, config: SessionConfig): SessionRef {
         val options = baseOptions(config)
         if (!tryEnableNnapi(options)) {
             throw IllegalStateException("SESSION_INIT_ERROR: NNAPI provider is not available on this device/build")
         }
-        val session = environment.createSession(modelRef.file.absolutePath, options)
-        return SessionRef(modelRef.modelId, modelRef.version, session, config, "nnapi")
+        val session = environment.createSession(filePath, options)
+        return SessionRef(modelId, version, session, config, "nnapi")
     }
 
-    private fun createCpuSession(modelRef: ModelRef, config: SessionConfig): SessionRef {
+    private fun createCpuSession(modelId: String, version: String, filePath: String, config: SessionConfig): SessionRef {
         val options = baseOptions(config)
-        val session = environment.createSession(modelRef.file.absolutePath, options)
-        return SessionRef(modelRef.modelId, modelRef.version, session, config, "cpu")
+        val session = environment.createSession(filePath, options)
+        return SessionRef(modelId, version, session, config, "cpu")
     }
 
     private fun baseOptions(config: SessionConfig): OrtSession.SessionOptions {

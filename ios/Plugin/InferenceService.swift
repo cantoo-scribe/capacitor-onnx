@@ -1,6 +1,37 @@
 import Foundation
 import onnxruntime
 
+enum OnnxPluginError: Error {
+    case modelInvalid(String)
+    case sessionInitError(String)
+    case inferenceError(String)
+    case internalError(String)
+
+    var code: String {
+        switch self {
+        case .modelInvalid: return "MODEL_INVALID"
+        case .sessionInitError: return "SESSION_INIT_ERROR"
+        case .inferenceError: return "INFERENCE_ERROR"
+        case .internalError: return "INTERNAL_ERROR"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .modelInvalid(let m), .sessionInitError(let m),
+             .inferenceError(let m), .internalError(let m):
+            return m
+        }
+    }
+
+    var retryable: Bool {
+        switch self {
+        case .sessionInitError: return true
+        default: return false
+        }
+    }
+}
+
 struct RawTensorInternal {
     let data: [Float]
     let dims: [Int64]
@@ -9,34 +40,33 @@ struct RawTensorInternal {
 
 class InferenceService {
     private let sessionManager: SessionManager
-    private let modelStore: ModelStore
     private var perSessionLocks: [String: NSLock] = [:]
     private let locksLock = NSLock()
 
-    init(sessionManager: SessionManager, modelStore: ModelStore) {
+    init(sessionManager: SessionManager) {
         self.sessionManager = sessionManager
-        self.modelStore = modelStore
     }
 
     func prepareModel(
         modelId: String,
         version: String,
-        url: String,
-        sha256: String?,
-        forceRedownload: Bool,
+        filePath: String,
         sessionConfig: SessionConfig
-    ) async throws -> (cacheHit: Bool, executionProviderUsed: String) {
-        let modelRef = try await modelStore.prepare(modelId: modelId, version: version, url: url, sha256: sha256, forceRedownload: forceRedownload)
-        let sessionRef = try sessionManager.ensureSession(modelRef: modelRef, config: sessionConfig)
-        return (cacheHit: modelRef.cacheHit, executionProviderUsed: sessionRef.executionProviderUsed)
+    ) throws -> String {
+        let sessionRef = try sessionManager.ensureSession(
+            modelId: modelId,
+            version: version,
+            filePath: filePath,
+            config: sessionConfig
+        )
+        return sessionRef.executionProviderUsed
     }
 
-    func warmup(modelId: String, version: String, warmupInput: RawTensorInternal? = nil) throws {
-        let modelRef = try modelStore.resolve(modelId: modelId, version: version)
-        let sessionRef = try sessionManager.ensureSession(modelRef: modelRef)
-        if let warmupInput = warmupInput {
-            try runWarmup(session: sessionRef.session, warmupInput: warmupInput)
+    func warmup(modelId: String, version: String, warmupInput: RawTensorInternal) throws {
+        guard let sessionRef = sessionManager.getSession(modelId: modelId, version: version) else {
+            throw OnnxPluginError.sessionInitError("model not loaded, call loadModel first")
         }
+        try runWarmup(session: sessionRef.session, warmupInput: warmupInput)
     }
 
     func run(
@@ -64,13 +94,14 @@ class InferenceService {
             throw OnnxPluginError.inferenceError("input tensor data size does not match dims")
         }
 
-        let modelRef = try modelStore.resolve(modelId: modelId, version: version)
+        guard let sessionRef = sessionManager.getSession(modelId: modelId, version: version) else {
+            throw OnnxPluginError.sessionInitError("model not loaded, call loadModel first")
+        }
         let lock = sessionLock(for: modelId, version: version)
 
         lock.lock()
         defer { lock.unlock() }
 
-        let sessionRef = try sessionManager.ensureSession(modelRef: modelRef)
         let session = sessionRef.session
 
         let inputNames = try session.inputNames()

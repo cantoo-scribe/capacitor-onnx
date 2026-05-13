@@ -1,7 +1,4 @@
 export type PluginErrorCode =
-  | "NETWORK_ERROR"
-  | "INTEGRITY_ERROR"
-  | "MODEL_INTEGRITY_ERROR"
   | "MODEL_INVALID"
   | "SESSION_INIT_ERROR"
   | "INFERENCE_ERROR"
@@ -17,30 +14,20 @@ export interface PluginError {
   details?: Record<string, unknown>;
 }
 
-export type CacheStorage = {
-  read: (path: string) => Promise<ArrayBuffer | null>;
-  write: (path: string, data: ArrayBuffer) => Promise<void>;
-  delete: (path: string) => Promise<void>;
-};
-
 export interface WebConfig {
-  cacheStorage?: CacheStorage | null;
   wasmPath?: string;
 }
 
 export interface LoadModelInput {
   modelId: string;
   version: string;
-  url: string;
-  sha256?: string;
+  filePath?: string;
+  modelBuffer?: Uint8Array;
   warmupInput?: RawTensor;
-  timeoutMs?: number;
-  forceRedownload?: boolean;
   sessionOptions?: SessionOptionsInput;
 }
 
 export interface LoadModelResult {
-  status: "downloaded" | "cache_hit";
   sessionReady: boolean;
   warmed?: boolean;
   warmupLatencyMs?: number;
@@ -71,23 +58,13 @@ export interface RunResult {
   latencyMs: number;
 }
 
-export interface ClearModelInput {
+export interface ReleaseModelInput {
   modelId: string;
   version: string;
-}
-
-export interface ClearModelResult {
-  removed: boolean;
-}
-
-export interface ClearAllCacheResult {
-  removedModels: number;
 }
 
 export interface CapacitorOnnxPlugin {
   loadModel(input: LoadModelInput): Promise<LoadModelResult>;
   run(input: RunInput): Promise<RunResult>;
-  release(input: ClearModelInput): Promise<void>;
-  clearModel(input: ClearModelInput): Promise<ClearModelResult>;
-  clearAllCache(): Promise<ClearAllCacheResult>;
+  release(input: ReleaseModelInput): Promise<void>;
 }

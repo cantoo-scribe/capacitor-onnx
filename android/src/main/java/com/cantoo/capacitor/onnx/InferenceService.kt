@@ -15,44 +15,28 @@ data class RawTensorInternal(
     val type: String,
 )
 
-data class PrepareModelRuntimeResultInternal(
-    val cacheHit: Boolean,
-    val executionProviderUsed: String,
-)
-
 class InferenceService(
     private val sessionManager: SessionManager,
-    private val modelStore: ModelStore,
 ) {
     private val perSessionLock = ConcurrentHashMap<String, Mutex>()
 
     suspend fun prepareModel(
         modelId: String,
         version: String,
-        url: String,
-        sha256: String?,
-        forceRedownload: Boolean,
+        filePath: String,
         sessionConfig: SessionConfig,
-    ): PrepareModelRuntimeResultInternal = withContext(Dispatchers.IO) {
-        val prepare = modelStore.prepare(modelId, version, url, sha256, forceRedownload)
-        val session = sessionManager.ensureSession(prepare.modelRef, sessionConfig)
-        PrepareModelRuntimeResultInternal(
-            cacheHit = prepare.cacheHit,
-            executionProviderUsed = session.executionProviderUsed,
-        )
+    ): String = withContext(Dispatchers.IO) {
+        val session = sessionManager.ensureSession(modelId, version, filePath, sessionConfig)
+        session.executionProviderUsed
     }
 
     suspend fun warmup(
         modelId: String,
         version: String,
-        warmupInput: RawTensorInternal? = null,
+        warmupInput: RawTensorInternal,
     ) = withContext(Dispatchers.Default) {
-        val modelRef = modelStore.resolve(modelId, version)
-        val sessionRef = sessionManager.ensureSession(modelRef)
-
-        if (warmupInput == null) {
-            return@withContext
-        }
+        val sessionRef = sessionManager.getSession(modelId, version)
+            ?: throw IllegalStateException("SESSION_INIT_ERROR: model not loaded, call loadModel first")
 
         val lock = perSessionLock.computeIfAbsent("$modelId::$version") { Mutex() }
         lock.withLock {
@@ -81,11 +65,11 @@ class InferenceService(
         inputTensorDims: LongArray,
         inputTensorType: String,
     ): RawTensorInternal = withContext(Dispatchers.Default) {
-        val modelRef = modelStore.resolve(modelId, version)
+        val sessionRef = sessionManager.getSession(modelId, version)
+            ?: throw IllegalStateException("SESSION_INIT_ERROR: model not loaded, call loadModel first")
         val lock = perSessionLock.computeIfAbsent("$modelId::$version") { Mutex() }
 
         lock.withLock {
-            val sessionRef = sessionManager.ensureSession(modelRef)
             if (inputTensorType != "float32") {
                 throw IllegalStateException("INFERENCE_ERROR: only float32 tensors are supported")
             }

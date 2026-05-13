@@ -3,21 +3,17 @@ import Foundation
 
 @objc(CapacitorOnnxPlugin)
 public class CapacitorOnnxPlugin: CAPPlugin {
-    private var modelStore: ModelStore!
     private var sessionManager: SessionManager!
     private var inferenceService: InferenceService!
 
     override public func load() {
-        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("capacitor_onnx")
-        modelStore = ModelStore(rootDir: root)
         do {
             sessionManager = try SessionManager()
         } catch {
             print("[CapacitorOnnx] Failed to initialize SessionManager: \(error)")
             return
         }
-        inferenceService = InferenceService(sessionManager: sessionManager, modelStore: modelStore)
+        inferenceService = InferenceService(sessionManager: sessionManager)
     }
 
     @objc func isActive(_ call: CAPPluginCall) {
@@ -26,14 +22,27 @@ public class CapacitorOnnxPlugin: CAPPlugin {
 
     @objc func loadModel(_ call: CAPPluginCall) {
         guard let modelId = call.getString("modelId"),
-              let version = call.getString("version"),
-              let url = call.getString("url") else {
-            rejectStructured(call, code: "INFERENCE_ERROR", message: "Missing required fields: modelId, version, url")
+              let version = call.getString("version") else {
+            rejectStructured(call, code: "INFERENCE_ERROR", message: "Missing required fields: modelId, version")
             return
         }
 
-        let sha256 = call.getString("sha256")
-        let forceRedownload = call.getBool("forceRedownload") ?? false
+        if call.hasOption("modelBuffer") {
+            rejectStructured(call, code: "MODEL_INVALID", message: "modelBuffer is not supported on iOS; pass filePath (file:// URI or absolute path) instead")
+            return
+        }
+
+        guard let rawFilePath = call.getString("filePath"), !rawFilePath.isEmpty else {
+            rejectStructured(call, code: "MODEL_INVALID", message: "Expected exactly one of filePath or modelBuffer")
+            return
+        }
+
+        let filePath = Self.resolveFilePath(rawFilePath)
+        guard FileManager.default.fileExists(atPath: filePath) else {
+            rejectStructured(call, code: "MODEL_INVALID", message: "Model file not found at filePath: \(rawFilePath)")
+            return
+        }
+
         let warmupInputJson = call.getObject("warmupInput")
         let sessionOptions = call.getObject("sessionOptions")
         let providerRaw = (sessionOptions?["executionProvider"] as? String ?? "auto").lowercased()
@@ -72,9 +81,8 @@ public class CapacitorOnnxPlugin: CAPPlugin {
         Task {
             do {
                 let startMs = currentTimeMs()
-                let result = try await inferenceService.prepareModel(
-                    modelId: modelId, version: version, url: url,
-                    sha256: sha256, forceRedownload: forceRedownload,
+                let executionProviderUsed = try inferenceService.prepareModel(
+                    modelId: modelId, version: version, filePath: filePath,
                     sessionConfig: config
                 )
 
@@ -88,32 +96,13 @@ public class CapacitorOnnxPlugin: CAPPlugin {
                 }
 
                 var response: [String: Any] = [
-                    "status": result.cacheHit ? "cache_hit" : "downloaded",
                     "sessionReady": true,
-                    "executionProviderUsed": result.executionProviderUsed,
+                    "executionProviderUsed": executionProviderUsed,
                     "warmed": warmed,
                     "latencyMs": currentTimeMs() - startMs,
                 ]
                 if let wl = warmupLatencyMs { response["warmupLatencyMs"] = wl }
                 call.resolve(response)
-            } catch {
-                rejectStructured(call, error: error)
-            }
-        }
-    }
-
-    @objc func warmupModel(_ call: CAPPluginCall) {
-        guard let modelId = call.getString("modelId"),
-              let version = call.getString("version") else {
-            rejectStructured(call, code: "INFERENCE_ERROR", message: "Missing required fields: modelId, version")
-            return
-        }
-
-        Task {
-            do {
-                let startMs = currentTimeMs()
-                try inferenceService.warmup(modelId: modelId, version: version)
-                call.resolve(["warmed": true, "latencyMs": currentTimeMs() - startMs])
             } catch {
                 rejectStructured(call, error: error)
             }
@@ -178,47 +167,14 @@ public class CapacitorOnnxPlugin: CAPPlugin {
         call.resolve()
     }
 
-    @objc func clearModel(_ call: CAPPluginCall) {
-        guard let modelId = call.getString("modelId"),
-              let version = call.getString("version") else {
-            rejectStructured(call, code: "INFERENCE_ERROR", message: "Missing required fields: modelId, version")
-            return
+    // MARK: - Helpers
+
+    private static func resolveFilePath(_ raw: String) -> String {
+        if raw.hasPrefix("file://") {
+            return URL(string: raw)?.path ?? raw
         }
-        sessionManager.closeSession(modelId: modelId, version: version)
-        let removed = modelStore.clearModel(modelId: modelId, version: version)
-        call.resolve(["removed": removed])
+        return raw
     }
-
-    @objc func clearAllCache(_ call: CAPPluginCall) {
-        sessionManager.closeAll()
-        let removed = modelStore.clearAll()
-        call.resolve(["removedModels": removed])
-    }
-
-    @objc func getModelStatus(_ call: CAPPluginCall) {
-        guard let modelId = call.getString("modelId"),
-              let version = call.getString("version") else {
-            rejectStructured(call, code: "INFERENCE_ERROR", message: "Missing required fields: modelId, version")
-            return
-        }
-        let status = modelStore.getModelStatus(modelId: modelId, version: version)
-        var response: [String: Any] = [
-            "exists": status.exists,
-            "integrityOk": status.integrityOk,
-            "sessionLoaded": sessionManager.hasSession(modelId: modelId, version: version),
-        ]
-        if let size = status.sizeBytes { response["sizeBytes"] = size }
-        call.resolve(response)
-    }
-
-    @objc func getDiagnostics(_ call: CAPPluginCall) {
-        call.resolve([
-            "activeSessions": sessionManager.activeSessionCount(),
-            "cacheEntries": modelStore.cacheEntryCount(),
-        ])
-    }
-
-    // MARK: - Error helpers
 
     private func rejectStructured(_ call: CAPPluginCall, error: Error) {
         if let pluginError = error as? OnnxPluginError {
@@ -229,7 +185,7 @@ public class CapacitorOnnxPlugin: CAPPlugin {
     }
 
     private func rejectStructured(_ call: CAPPluginCall, code: String, message: String, retryable: Bool? = nil) {
-        let isRetryable = retryable ?? ["NETWORK_ERROR", "TIMEOUT", "CANCELED", "SESSION_INIT_ERROR"].contains(code)
+        let isRetryable = retryable ?? ["TIMEOUT", "CANCELED", "SESSION_INIT_ERROR"].contains(code)
         let correlationId = UUID().uuidString
         call.reject(message, code, nil, [
             "code": code,

@@ -5,6 +5,7 @@ import ai.onnxruntime.OnnxJavaType
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.TensorInfo
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -67,11 +68,15 @@ class InferenceService(
         version: String,
         inputs: Map<String, RawTensorInternal>,
     ): Map<String, RawTensorInternal> = withContext(Dispatchers.Default) {
+        // TEMPORARY diagnostic instrumentation — revert after debugging the Android freeze.
+        Log.i("CapacitorOnnxDbg", "IS.run() enter t=${Thread.currentThread().name}")
         val sessionRef = sessionManager.getSession(modelId, version)
             ?: throw IllegalStateException("SESSION_INIT_ERROR: model not loaded, call loadModel first")
         val lock = perSessionLock.computeIfAbsent("$modelId::$version") { Mutex() }
 
+        Log.i("CapacitorOnnxDbg", "IS.run() waiting for lock, isLocked=${lock.isLocked}")
         lock.withLock {
+            Log.i("CapacitorOnnxDbg", "IS.run() LOCK ACQUIRED t=${Thread.currentThread().name}")
             if (inputs.isEmpty()) {
                 throw IllegalStateException("INFERENCE_ERROR: run() requires at least one input tensor")
             }
@@ -88,7 +93,9 @@ class InferenceService(
                     tensors[name] = buildOnnxTensor(env, name, raw)
                 }
 
+                Log.i("CapacitorOnnxDbg", "IS.run() before session.run()")
                 session.run(tensors).use { result ->
+                    Log.i("CapacitorOnnxDbg", "IS.run() session.run() RETURNED")
                     val outputs = LinkedHashMap<String, RawTensorInternal>()
                     for (entry in result) {
                         val tensor = entry.value as? OnnxTensor ?: continue
@@ -97,6 +104,7 @@ class InferenceService(
                     if (outputs.isEmpty()) {
                         throw IllegalStateException("MODEL_INVALID: model produced no outputs")
                     }
+                    Log.i("CapacitorOnnxDbg", "IS.run() outputs read, returning")
                     return@withLock outputs
                 }
             } finally {

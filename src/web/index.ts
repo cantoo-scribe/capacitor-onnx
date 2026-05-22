@@ -13,6 +13,7 @@ import { CapacitorOnnxError } from "../errors";
 import { elapsedMs, nowMs } from "../helpers/time";
 import { createSessionWithFallback } from "./provider-resolver";
 import { applyRuntimeThreads, applyWebRuntimeConfig } from "./runtime-config";
+import { fromOrtTensor, toOrtTensor } from "./tensor";
 
 export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
   private sessions = new Map<string, ort.InferenceSession>();
@@ -58,9 +59,9 @@ export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
     let warmed = false;
     let warmupLatencyMs: number | undefined;
 
-    if (_input.warmupInput) {
+    if (_input.warmupInputs && Object.keys(_input.warmupInputs).length > 0) {
       const warmupStartTime = nowMs();
-      warmed = await CapacitorOnnxWeb.warmupSession(session, _input.warmupInput);
+      warmed = await CapacitorOnnxWeb.warmupSession(session, _input.warmupInputs);
       warmupLatencyMs = elapsedMs(warmupStartTime);
     }
 
@@ -85,31 +86,41 @@ export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
       );
     }
 
-    const inputTensor = new ort.Tensor(
-      _input.inputTensor.type,
-      _input.inputTensor.data,
-      _input.inputTensor.dims,
-    );
-
-    const inputName = session.inputNames[0];
-    if (!inputName) {
-      throw new CapacitorOnnxError("MODEL_INVALID", "Model has no inputs.");
+    const inputNames = Object.keys(_input.inputs ?? {});
+    if (inputNames.length === 0) {
+      throw new CapacitorOnnxError(
+        "INFERENCE_ERROR",
+        "run() requires at least one input tensor in `inputs`.",
+      );
     }
 
-    const inferenceResult = await session.run({ [inputName]: inputTensor });
-    const outputName = session.outputNames[0] ?? Object.keys(inferenceResult)[0];
-    const outputTensor = outputName ? inferenceResult[outputName] : undefined;
+    const feeds: Record<string, ort.Tensor> = {};
+    for (const name of inputNames) {
+      if (!session.inputNames.includes(name)) {
+        throw new CapacitorOnnxError(
+          "INFERENCE_ERROR",
+          `Model has no input named '${name}'.`,
+        );
+      }
+      feeds[name] = toOrtTensor(_input.inputs[name]);
+    }
 
-    if (!outputTensor) {
-      throw new CapacitorOnnxError("MODEL_INVALID", "Model has no outputs.");
+    const inferenceResult = await session.run(feeds);
+
+    const outputs: Record<string, RawTensor> = {};
+    for (const name of session.outputNames) {
+      const tensor = inferenceResult[name];
+      if (tensor) {
+        outputs[name] = fromOrtTensor(tensor);
+      }
+    }
+
+    if (Object.keys(outputs).length === 0) {
+      throw new CapacitorOnnxError("MODEL_INVALID", "Model produced no outputs.");
     }
 
     return {
-      logits: {
-        type: outputTensor.type as RawTensor["type"],
-        data: Array.from(outputTensor.data as ArrayLike<number | bigint>, Number),
-        dims: outputTensor.dims,
-      },
+      outputs,
       latencyMs: elapsedMs(startTime),
     };
   }
@@ -125,16 +136,19 @@ export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
 
   private static async warmupSession(
     session: ort.InferenceSession,
-    warmupInput: RawTensor,
+    warmupInputs: Record<string, RawTensor>,
   ): Promise<boolean> {
-    const inputName = session.inputNames[0];
-    if (!inputName) {
+    const names = Object.keys(warmupInputs);
+    if (names.length === 0) {
       return false;
     }
 
     try {
-      const tensor = new ort.Tensor(warmupInput.type, warmupInput.data, warmupInput.dims);
-      await session.run({ [inputName]: tensor });
+      const feeds: Record<string, ort.Tensor> = {};
+      for (const name of names) {
+        feeds[name] = toOrtTensor(warmupInputs[name]);
+      }
+      await session.run(feeds);
       return true;
     } catch (err) {
       console.warn(

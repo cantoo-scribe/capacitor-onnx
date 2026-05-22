@@ -119,8 +119,8 @@ The package exports:
 
 | Method | Signature | Purpose | Notes |
 | --- | --- | --- | --- |
-| `loadModel` | `(input: LoadModelInput) => Promise<LoadModelResult>` | Creates an ONNX Runtime session from the model bytes (web) or file path (native), and optionally warms it up. Must be called once per `modelId+version` before `run`. | Native: pass `filePath` (absolute path or `file://` URI). Web: pass `modelBuffer: Uint8Array`. Pass `warmupInput` (a `RawTensor` matching one valid input shape) to pay first-inference cost upfront, and `sessionOptions` to pick the execution provider / thread counts. The result includes `executionProviderUsed`. |
-| `run` | `(input: RunInput) => Promise<RunResult>` | Runs inference on a previously loaded session. Resolves I/O names from session metadata, so the consumer only supplies `inputTensor`. | Calls to the same `modelId+version` are serialized by a per-session lock; different models run in parallel. Returns `{ logits, latencyMs }`. Pre/post-processing is the consumer's responsibility. |
+| `loadModel` | `(input: LoadModelInput) => Promise<LoadModelResult>` | Creates an ONNX Runtime session from the model bytes (web) or file path (native), and optionally warms it up. Must be called once per `modelId+version` before `run`. | Native: pass `filePath` (absolute path or `file://` URI). Web: pass `modelBuffer: Uint8Array`. Pass `warmupInputs` (a `Record<string, RawTensor>` keyed by model input name) to pay first-inference cost upfront, and `sessionOptions` to pick the execution provider / thread counts. The result includes `executionProviderUsed`. |
+| `run` | `(input: RunInput) => Promise<RunResult>` | Runs inference on a previously loaded session. | Pass `inputs` as a `Record<string, RawTensor>` keyed by the model's ONNX input names. Calls to the same `modelId+version` are serialized by a per-session lock; different models run in parallel. Returns `{ outputs, latencyMs }`, where `outputs` is keyed by the model's output names. Pre/post-processing is the consumer's responsibility. |
 | `release` | `(input: ReleaseModelInput) => Promise<void>` | Releases the in-memory ONNX session for the given `modelId+version`. | Use to free RAM/GPU memory when you are done with a model. The host app is responsible for managing model files on disk. |
 
 Type definitions for every input/result (e.g. `LoadModelInput`, `RawTensor`, `SessionOptionsInput`, `PluginError`) live in [src/definitions.ts](src/definitions.ts).
@@ -154,30 +154,38 @@ async function loadDemoModel() {
 
 await loadDemoModel();
 
-const result = await CapacitorOnnx.run({
+const { outputs } = await CapacitorOnnx.run({
   modelId: 'demo-model',
   version: '1.0.0',
-  inputTensor: {
-    type: 'float32',
-    dims: [1, 4],
-    data: [0.1, 0.2, 0.3, 0.4],
+  inputs: {
+    input_values: {
+      type: 'float32',
+      dims: [1, 16000],
+      data: [/* normalized audio samples */],
+    },
+    attention_mask: {
+      type: 'int64',
+      dims: [1, 16000],
+      data: [/* 1s for real samples, 0s for padding */],
+    },
   },
 });
 
-console.log(result.logits.dims, result.logits.data.length);
+const logits = outputs.logits;
+console.log(logits.dims, logits.data.length);
 
 await CapacitorOnnx.release({ modelId: 'demo-model', version: '1.0.0' });
 ```
 
 ## Runtime Notes
 
-- `loadModel` supports optional `warmupInput: RawTensor` to pre-run the session with a sample tensor of the exact shape the model expects (e.g. `{ type: 'float32', dims: [1, 16000], data: [...] }`). Warmup is skipped when `warmupInput` is omitted.
+- `loadModel` supports optional `warmupInputs: Record<string, RawTensor>` to pre-run the session with sample tensors keyed by model input name (e.g. `{ input_values: { type: 'float32', dims: [1, 16000], data: [...] } }`). Warmup is skipped when `warmupInputs` is omitted.
 - `loadModel` returns `executionProviderUsed` with the provider that was actually initialized.
 - Web provider selection supports `sessionOptions.executionProvider` with `auto`, `wasm`, `webgpu`, `webnn` plus native aliases (`cpu`/`nnapi`/`coreml` mapped to `wasm` in Web).
 - In Web `auto` mode, provider resolution tries accelerated providers first (`webgpu`, `webnn`) and falls back to `wasm`.
 - iOS provider mapping: `cpu` → CPU, `nnapi`/`coreml` → CoreML, `auto` → CoreML with CPU fallback, web providers (`wasm`/`webgpu`/`webnn`) → CPU.
-- `run` accepts `inputTensor` and resolves model I/O names from session metadata (`inputNames`/`outputNames`) instead of hardcoded names.
-- **Output shape**: `RunResult.logits.dims` is the shape ORT materialized for the output tensor — Web reads `outputTensor.dims`, Android reads `OnnxTensor.info.shape`, iOS reads `tensorTypeAndShapeInfo().shape`. No heuristic, no symbolic dims (`-1`) in the result, no batch assumptions. Models with multiple independent dynamic axes are returned with their true runtime shape.
+- `run` takes `inputs` keyed by ONNX input name and returns every model output in `outputs` keyed by ONNX output name. Android accepts `float32`, `int64`, `int32`, `bool`, `uint8`; iOS accepts the same set **except `bool`** (the ONNX Runtime Obj-C API exposes no bool tensor type). `float16`/`uint32` are web-only. Unsupported types are rejected on native with a structured error.
+- **Output shape & dtype**: each `RunResult.outputs` tensor carries the shape and dtype ORT materialized — Web reads `ort.Tensor.dims`/`.type`, Android reads `OnnxTensor.info.shape`/`.type`, iOS reads `tensorTypeAndShapeInfo().shape`/`.elementType`. No heuristic, no symbolic dims (`-1`) in the result.
 - Errors are normalized with structured fields (`code`, `message`, `retryable`, `correlationId`, `details`).
 
 ## Docs

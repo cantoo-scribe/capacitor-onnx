@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "CantooCapacitorOnnx",
-    platforms: [.iOS(.v14)],
+    platforms: [.iOS("15.1")],
     products: [
         .library(
             name: "CantooCapacitorOnnx",

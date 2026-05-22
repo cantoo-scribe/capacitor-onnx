@@ -1,5 +1,10 @@
 import Foundation
+// See InferenceService.swift: SPM exposes `onnxruntime`, CocoaPods `onnxruntime_objc`.
+#if canImport(onnxruntime)
 import onnxruntime
+#else
+import onnxruntime_objc
+#endif
 
 struct SessionConfig {
     let executionProvider: String
@@ -35,12 +40,12 @@ struct SessionRef {
 }
 
 class SessionManager {
-    private let environment: ORTEnvironment
+    private let environment: ORTEnv
     private var sessions: [String: SessionRef] = [:]
     private let lock = NSLock()
 
     init() throws {
-        self.environment = try ORTEnvironment(loggingLevel: .warning)
+        self.environment = try ORTEnv(loggingLevel: .warning)
     }
 
     func ensureSession(modelId: String, version: String, filePath: String, config: SessionConfig) throws -> SessionRef {
@@ -101,7 +106,7 @@ class SessionManager {
     private func createCoreMLSession(modelId: String, version: String, filePath: String, config: SessionConfig) throws -> SessionRef {
         let options = try buildOptions(config: config)
         do {
-            try options.appendCoreMLExecutionProvider(withFlags: 0)
+            try options.appendCoreMLExecutionProvider(with: ORTCoreMLExecutionProviderOptions())
         } catch {
             throw OnnxPluginError.sessionInitError("CoreML provider is not available on this device")
         }
@@ -120,9 +125,9 @@ class SessionManager {
         try options.setGraphOptimizationLevel(.all)
         let defaultIntra = min(ProcessInfo.processInfo.activeProcessorCount, 4)
         let intra = config.intraOpNumThreads ?? defaultIntra
-        let inter = config.interOpNumThreads ?? 1
         try options.setIntraOpNumThreads(Int32(intra))
-        try options.setInterOpNumThreads(Int32(inter))
+        // onnxruntime-objc's ORTSessionOptions exposes no inter-op thread setter;
+        // SessionConfig.interOpNumThreads is accepted but not applied on iOS.
         return options
     }
 

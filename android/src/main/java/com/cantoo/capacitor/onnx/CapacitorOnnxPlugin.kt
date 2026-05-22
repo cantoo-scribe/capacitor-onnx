@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
@@ -49,7 +50,7 @@ class CapacitorOnnxPlugin : Plugin() {
         val modelId = call.getString("modelId")
         val version = call.getString("version")
         val rawFilePath = call.getString("filePath")
-        val warmupInputJson = call.getObject("warmupInput")
+        val warmupInputsJson = call.getObject("warmupInputs")
         val sessionOptions = call.getObject("sessionOptions")
         val executionProvider = (sessionOptions?.optString("executionProvider", "auto") ?: "auto").lowercase()
 
@@ -106,9 +107,9 @@ class CapacitorOnnxPlugin : Plugin() {
             interOpNumThreads = interOpNumThreads,
         )
 
-        val warmupInput = parseWarmupInput(warmupInputJson)
-        if (warmupInputJson != null && warmupInput == null) {
-            rejectStructured(call, "INFERENCE_ERROR", "Invalid warmupInput: must include float32 data and positive dims")
+        val warmupInputs = if (warmupInputsJson != null) parseTensorMap(warmupInputsJson) else null
+        if (warmupInputsJson != null && (warmupInputs == null || warmupInputs.isEmpty())) {
+            rejectStructured(call, "INFERENCE_ERROR", "Invalid warmupInputs: each entry must include numeric data and positive dims")
             return
         }
 
@@ -121,9 +122,9 @@ class CapacitorOnnxPlugin : Plugin() {
                     filePath = resolvedPath,
                     sessionConfig = sessionConfig,
                 )
-                val warmupLatencyMs = if (warmupInput != null) {
+                val warmupLatencyMs = if (warmupInputs != null && warmupInputs.isNotEmpty()) {
                     val warmupStartMs = System.currentTimeMillis()
-                    inferenceService.warmup(modelId, version, warmupInput)
+                    inferenceService.warmup(modelId, version, warmupInputs)
                     System.currentTimeMillis() - warmupStartMs
                 } else {
                     null
@@ -132,7 +133,7 @@ class CapacitorOnnxPlugin : Plugin() {
                 val result = JSObject().apply {
                     put("sessionReady", true)
                     put("executionProviderUsed", executionProviderUsed)
-                    put("warmed", warmupInput != null)
+                    put("warmed", warmupInputs != null && warmupInputs.isNotEmpty())
                     warmupLatencyMs?.let { put("warmupLatencyMs", it) }
                     put("latencyMs", System.currentTimeMillis() - startMs)
                 }
@@ -143,21 +144,28 @@ class CapacitorOnnxPlugin : Plugin() {
         }
     }
 
-    private fun parseWarmupInput(json: JSObject?): RawTensorInternal? {
-        if (json == null) return null
+    private fun parseTensorMap(json: JSObject): Map<String, RawTensorInternal>? {
+        val result = LinkedHashMap<String, RawTensorInternal>()
+        val keys = json.keys()
+        while (keys.hasNext()) {
+            val name = keys.next()
+            val tensorJson = json.optJSONObject(name) ?: return null
+            val tensor = parseTensor(tensorJson) ?: return null
+            result[name] = tensor
+        }
+        return result
+    }
+
+    private fun parseTensor(json: JSONObject): RawTensorInternal? {
         val type = json.optString("type", "")
-        if (type != "float32") return null
+        if (type.isBlank()) return null
         val dataJson = json.optJSONArray("data") ?: return null
         val dimsJson = json.optJSONArray("dims") ?: return null
 
-        val data = FloatArray(dataJson.length()) { i ->
-            dataJson.optDouble(i, Double.NaN).toFloat()
-        }
+        val data = DoubleArray(dataJson.length()) { i -> dataJson.optDouble(i, Double.NaN) }
         if (data.any { it.isNaN() }) return null
 
-        val dims = LongArray(dimsJson.length()) { i ->
-            dimsJson.optLong(i, -1L)
-        }
+        val dims = LongArray(dimsJson.length()) { i -> dimsJson.optLong(i, -1L) }
         if (dims.isEmpty() || dims.any { it <= 0L }) return null
 
         var elementCount = 1L
@@ -167,38 +175,32 @@ class CapacitorOnnxPlugin : Plugin() {
         return RawTensorInternal(data = data, dims = dims, type = type)
     }
 
+    private fun tensorToJson(tensor: RawTensorInternal): JSObject {
+        val dataArray = JSArray()
+        tensor.data.forEach { dataArray.put(it) }
+        val dimsArray = JSArray()
+        tensor.dims.forEach { dimsArray.put(it.toDouble()) }
+        return JSObject().apply {
+            put("data", dataArray)
+            put("dims", dimsArray)
+            put("type", tensor.type)
+        }
+    }
+
     @PluginMethod
     fun run(call: PluginCall) {
         val modelId = call.getString("modelId")
         val version = call.getString("version")
-        val inputTensor = call.getObject("inputTensor")
+        val inputsJson = call.getObject("inputs")
 
-        if (modelId == null || version == null || inputTensor == null) {
-            rejectStructured(call, "INFERENCE_ERROR", "Missing required fields: modelId, version, inputTensor")
+        if (modelId == null || version == null || inputsJson == null) {
+            rejectStructured(call, "INFERENCE_ERROR", "Missing required fields: modelId, version, inputs")
             return
         }
 
-        val inputType = inputTensor.optString("type", "")
-        val inputDataJson = inputTensor.optJSONArray("data")
-        val inputDimsJson = inputTensor.optJSONArray("dims")
-        if (inputDataJson == null || inputDimsJson == null) {
-            rejectStructured(call, "INFERENCE_ERROR", "Missing required inputTensor fields: data, dims")
-            return
-        }
-
-        val inputData = FloatArray(inputDataJson.length()) { i ->
-            inputDataJson.optDouble(i, Double.NaN).toFloat()
-        }
-        if (inputData.any { it.isNaN() }) {
-            rejectStructured(call, "INFERENCE_ERROR", "Invalid inputTensor.data: values must be numeric")
-            return
-        }
-
-        val inputDims = LongArray(inputDimsJson.length()) { i ->
-            inputDimsJson.optLong(i, -1L)
-        }
-        if (inputDims.any { it <= 0L }) {
-            rejectStructured(call, "INFERENCE_ERROR", "Invalid inputTensor.dims: all dimensions must be positive integers")
+        val inputs = parseTensorMap(inputsJson)
+        if (inputs == null || inputs.isEmpty()) {
+            rejectStructured(call, "INFERENCE_ERROR", "Invalid inputs: each entry must include numeric data and positive dims")
             return
         }
 
@@ -208,25 +210,16 @@ class CapacitorOnnxPlugin : Plugin() {
                 val predictions = inferenceService.run(
                     modelId = modelId,
                     version = version,
-                    inputTensorData = inputData,
-                    inputTensorDims = inputDims,
-                    inputTensorType = inputType,
+                    inputs = inputs,
                 )
 
+                val outputsJson = JSObject()
+                for ((name, tensor) in predictions) {
+                    outputsJson.put(name, tensorToJson(tensor))
+                }
+
                 val result = JSObject().apply {
-                    val logitsData = JSArray()
-                    predictions.data.forEach { value ->
-                        logitsData.put(value.toDouble())
-                    }
-                    val logitsDims = JSArray()
-                    predictions.dims.forEach { dim ->
-                        logitsDims.put(dim.toDouble())
-                    }
-                    put("logits", JSObject().apply {
-                        put("data", logitsData)
-                        put("dims", logitsDims)
-                        put("type", predictions.type)
-                    })
+                    put("outputs", outputsJson)
                     put("latencyMs", System.currentTimeMillis() - startMs)
                 }
                 call.resolve(result)

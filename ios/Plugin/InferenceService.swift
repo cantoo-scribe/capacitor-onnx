@@ -1,5 +1,12 @@
 import Foundation
+// The ONNX Runtime Objective-C API ships as the `onnxruntime` module via SPM
+// (onnxruntime-swift-package-manager) and as `onnxruntime_objc` via CocoaPods
+// (the onnxruntime-objc pod). Resolve whichever channel the host app uses.
+#if canImport(onnxruntime)
 import onnxruntime
+#else
+import onnxruntime_objc
+#endif
 
 enum OnnxPluginError: Error {
     case modelInvalid(String)
@@ -33,7 +40,7 @@ enum OnnxPluginError: Error {
 }
 
 struct RawTensorInternal {
-    let data: [Float]
+    let data: [Double]
     let dims: [Int64]
     let type: String
 }
@@ -62,99 +69,147 @@ class InferenceService {
         return sessionRef.executionProviderUsed
     }
 
-    func warmup(modelId: String, version: String, warmupInput: RawTensorInternal) throws {
+    func warmup(modelId: String, version: String, warmupInputs: [String: RawTensorInternal]) {
         guard let sessionRef = sessionManager.getSession(modelId: modelId, version: version) else {
-            throw OnnxPluginError.sessionInitError("model not loaded, call loadModel first")
+            return
         }
-        try runWarmup(session: sessionRef.session, warmupInput: warmupInput)
+        guard !warmupInputs.isEmpty else { return }
+        do {
+            var feeds: [String: ORTValue] = [:]
+            for (name, raw) in warmupInputs {
+                feeds[name] = try buildOrtValue(name: name, raw: raw)
+            }
+            let outputNames = Set(try sessionRef.session.outputNames())
+            _ = try sessionRef.session.run(withInputs: feeds, outputNames: outputNames, runOptions: nil)
+        } catch {
+            // best-effort warmup; surface failures via subsequent run() calls
+        }
     }
 
     func run(
         modelId: String,
         version: String,
-        inputData: [Float],
-        inputDims: [Int64],
-        inputType: String
-    ) throws -> RawTensorInternal {
-        guard inputType == "float32" else {
-            throw OnnxPluginError.inferenceError("only float32 tensors are supported")
+        inputs: [String: RawTensorInternal]
+    ) throws -> [String: RawTensorInternal] {
+        guard !inputs.isEmpty else {
+            throw OnnxPluginError.inferenceError("run() requires at least one input tensor")
         }
-        guard !inputData.isEmpty else {
-            throw OnnxPluginError.inferenceError("input tensor data is empty")
-        }
-        guard !inputDims.isEmpty else {
-            throw OnnxPluginError.inferenceError("input tensor dims is empty")
-        }
-
-        let elementCount = inputDims.reduce(1, *)
-        guard elementCount > 0 else {
-            throw OnnxPluginError.inferenceError("input tensor dims must have positive dimensions")
-        }
-        guard elementCount == Int64(inputData.count) else {
-            throw OnnxPluginError.inferenceError("input tensor data size does not match dims")
-        }
-
         guard let sessionRef = sessionManager.getSession(modelId: modelId, version: version) else {
             throw OnnxPluginError.sessionInitError("model not loaded, call loadModel first")
         }
-        let lock = sessionLock(for: modelId, version: version)
 
+        let lock = sessionLock(for: modelId, version: version)
         lock.lock()
         defer { lock.unlock() }
 
         let session = sessionRef.session
-
-        let inputNames = try session.inputNames()
-        guard let inputName = inputNames.first else {
-            throw OnnxPluginError.modelInvalid("model has no inputs")
-        }
-
+        let modelInputNames = Set(try session.inputNames())
         let outputNames = try session.outputNames()
-        guard let outputName = outputNames.first else {
+        guard !outputNames.isEmpty else {
             throw OnnxPluginError.modelInvalid("model has no outputs")
         }
 
-        let nsInputDims = inputDims.map { NSNumber(value: $0) }
-        var inputDataCopy = inputData
-        let tensorData = NSMutableData(bytes: &inputDataCopy, length: inputDataCopy.count * MemoryLayout<Float>.size)
-        let inputTensor = try ORTValue(tensorData: tensorData, elementType: .float, shape: nsInputDims)
+        var feeds: [String: ORTValue] = [:]
+        for (name, raw) in inputs {
+            guard modelInputNames.contains(name) else {
+                throw OnnxPluginError.inferenceError("model has no input named '\(name)'")
+            }
+            try validateTensor(name: name, raw: raw)
+            feeds[name] = try buildOrtValue(name: name, raw: raw)
+        }
 
-        let outputs = try session.run(withInputs: [inputName: inputTensor], outputNames: Set([outputName]), runOptions: nil)
+        let runOutputs = try session.run(
+            withInputs: feeds,
+            outputNames: Set(outputNames),
+            runOptions: nil
+        )
 
-        guard let outputValue = outputs[outputName] else {
+        var result: [String: RawTensorInternal] = [:]
+        for name in outputNames {
+            guard let value = runOutputs[name] else { continue }
+            result[name] = try readOrtValue(value)
+        }
+        guard !result.isEmpty else {
             throw OnnxPluginError.modelInvalid("model produced no output")
         }
-
-        let outputData = try outputValue.tensorData() as Data
-        let floatData = outputData.withUnsafeBytes { ptr -> [Float] in
-            Array(ptr.bindMemory(to: Float.self))
-        }
-
-        let typeInfo = try outputValue.tensorTypeAndShapeInfo()
-        let dims = typeInfo.shape.map { $0.int64Value }
-
-        return RawTensorInternal(data: floatData, dims: dims, type: "float32")
+        return result
     }
 
-    private func runWarmup(session: ORTSession, warmupInput: RawTensorInternal) throws {
-        let inputNames = try session.inputNames()
-        guard let inputName = inputNames.first else {
-            throw OnnxPluginError.modelInvalid("model has no inputs to warm up")
+    private func validateTensor(name: String, raw: RawTensorInternal) throws {
+        guard !raw.data.isEmpty else {
+            throw OnnxPluginError.inferenceError("input '\(name)' data is empty")
+        }
+        guard !raw.dims.isEmpty else {
+            throw OnnxPluginError.inferenceError("input '\(name)' dims is empty")
+        }
+        guard raw.dims.allSatisfy({ $0 > 0 }) else {
+            throw OnnxPluginError.inferenceError("input '\(name)' dims must have positive dimensions")
+        }
+        let elementCount = raw.dims.reduce(1, *)
+        guard elementCount == Int64(raw.data.count) else {
+            throw OnnxPluginError.inferenceError("input '\(name)' data size does not match dims")
+        }
+    }
+
+    private func buildOrtValue(name: String, raw: RawTensorInternal) throws -> ORTValue {
+        let shape = raw.dims.map { NSNumber(value: $0) }
+        let data = NSMutableData()
+        let elementType: ORTTensorElementDataType
+
+        switch raw.type {
+        case "float32":
+            var values = raw.data.map { Float($0) }
+            data.append(&values, length: values.count * MemoryLayout<Float>.stride)
+            elementType = .float
+        case "int32":
+            var values = raw.data.map { Int32($0) }
+            data.append(&values, length: values.count * MemoryLayout<Int32>.stride)
+            elementType = .int32
+        case "int64":
+            var values = raw.data.map { Int64($0) }
+            data.append(&values, length: values.count * MemoryLayout<Int64>.stride)
+            elementType = .int64
+        case "uint8":
+            var values = raw.data.map { UInt8($0) }
+            data.append(&values, length: values.count * MemoryLayout<UInt8>.stride)
+            elementType = .uInt8
+        default:
+            // Note: onnxruntime-objc's ORTTensorElementDataType has no `bool`
+            // case, so `bool` tensors are not supported on iOS (they are on
+            // Android/Web). `float16`/`uint32` are likewise unsupported here.
+            throw OnnxPluginError.inferenceError(
+                "unsupported tensor type '\(raw.type)' for input '\(name)'"
+            )
         }
 
-        let nsDims = warmupInput.dims.map { NSNumber(value: $0) }
-        var dataCopy = warmupInput.data
-        let tensorData = NSMutableData(
-            bytes: &dataCopy,
-            length: dataCopy.count * MemoryLayout<Float>.size,
-        )
-        let tensor = try ORTValue(tensorData: tensorData, elementType: .float, shape: nsDims)
+        return try ORTValue(tensorData: data, elementType: elementType, shape: shape)
+    }
 
-        _ = try? session.run(
-            withInputs: [inputName: tensor],
-            outputNames: Set(try session.outputNames()),
-            runOptions: nil,
-        )
+    private func readOrtValue(_ value: ORTValue) throws -> RawTensorInternal {
+        let info = try value.tensorTypeAndShapeInfo()
+        let dims = info.shape.map { $0.int64Value }
+        let raw = try value.tensorData() as Data
+
+        let data: [Double]
+        let type: String
+        switch info.elementType {
+        case .float:
+            data = raw.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }.map { Double($0) }
+            type = "float32"
+        case .int32:
+            data = raw.withUnsafeBytes { Array($0.bindMemory(to: Int32.self)) }.map { Double($0) }
+            type = "int32"
+        case .int64:
+            data = raw.withUnsafeBytes { Array($0.bindMemory(to: Int64.self)) }.map { Double($0) }
+            type = "int64"
+        case .uInt8:
+            data = raw.withUnsafeBytes { Array($0.bindMemory(to: UInt8.self)) }.map { Double($0) }
+            type = "uint8"
+        default:
+            throw OnnxPluginError.inferenceError("unsupported output tensor type")
+        }
+
+        return RawTensorInternal(data: data, dims: dims, type: type)
     }
 
     private func sessionLock(for modelId: String, version: String) -> NSLock {

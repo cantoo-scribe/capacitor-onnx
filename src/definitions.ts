@@ -23,7 +23,7 @@ export interface LoadModelInput {
   version: string;
   filePath?: string;
   modelBuffer?: Uint8Array;
-  warmupInput?: RawTensor;
+  warmupInputs?: Record<string, RawTensor>;
   sessionOptions?: SessionOptionsInput;
 }
 
@@ -44,7 +44,7 @@ export interface SessionOptionsInput {
 export interface RunInput {
   modelId: string;
   version: string;
-  inputTensor: RawTensor;
+  inputs: Record<string, RawTensor>;
 }
 
 export interface RawTensor {
@@ -54,7 +54,7 @@ export interface RawTensor {
 }
 
 export interface RunResult {
-  logits: RawTensor;
+  outputs: Record<string, RawTensor>;
   latencyMs: number;
 }
 

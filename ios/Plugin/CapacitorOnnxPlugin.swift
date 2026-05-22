@@ -43,7 +43,7 @@ public class CapacitorOnnxPlugin: CAPPlugin {
             return
         }
 
-        let warmupInputJson = call.getObject("warmupInput")
+        let warmupInputsJson = call.getObject("warmupInputs")
         let sessionOptions = call.getObject("sessionOptions")
         let providerRaw = (sessionOptions?["executionProvider"] as? String ?? "auto").lowercased()
         let validProviders = ["cpu", "nnapi", "coreml", "auto", "wasm", "webgpu", "webnn"]
@@ -65,15 +65,15 @@ public class CapacitorOnnxPlugin: CAPPlugin {
             return
         }
 
-        let warmupInput: RawTensorInternal?
-        if let warmupInputJson = warmupInputJson {
-            guard let parsed = Self.parseWarmupInput(warmupInputJson) else {
-                rejectStructured(call, code: "INFERENCE_ERROR", message: "Invalid warmupInput: must include float32 data and positive dims")
+        let warmupInputs: [String: RawTensorInternal]?
+        if let warmupInputsJson = warmupInputsJson {
+            guard let parsed = Self.parseTensorMap(warmupInputsJson), !parsed.isEmpty else {
+                rejectStructured(call, code: "INFERENCE_ERROR", message: "Invalid warmupInputs: each entry must include numeric data and positive dims")
                 return
             }
-            warmupInput = parsed
+            warmupInputs = parsed
         } else {
-            warmupInput = nil
+            warmupInputs = nil
         }
 
         let config = SessionConfig(executionProvider: providerRaw, intraOpNumThreads: intraOp, interOpNumThreads: interOp)
@@ -88,9 +88,9 @@ public class CapacitorOnnxPlugin: CAPPlugin {
 
                 var warmupLatencyMs: Double? = nil
                 var warmed = false
-                if let warmupInput = warmupInput {
+                if let warmupInputs = warmupInputs {
                     let warmupStart = currentTimeMs()
-                    try inferenceService.warmup(modelId: modelId, version: version, warmupInput: warmupInput)
+                    inferenceService.warmup(modelId: modelId, version: version, warmupInputs: warmupInputs)
                     warmupLatencyMs = currentTimeMs() - warmupStart
                     warmed = true
                 }
@@ -112,27 +112,13 @@ public class CapacitorOnnxPlugin: CAPPlugin {
     @objc func run(_ call: CAPPluginCall) {
         guard let modelId = call.getString("modelId"),
               let version = call.getString("version"),
-              let inputTensor = call.getObject("inputTensor") else {
-            rejectStructured(call, code: "INFERENCE_ERROR", message: "Missing required fields: modelId, version, inputTensor")
+              let inputsObj = call.getObject("inputs") else {
+            rejectStructured(call, code: "INFERENCE_ERROR", message: "Missing required fields: modelId, version, inputs")
             return
         }
 
-        let inputType = inputTensor["type"] as? String ?? ""
-        guard let inputDataRaw = inputTensor["data"] as? [Any],
-              let inputDimsRaw = inputTensor["dims"] as? [Any] else {
-            rejectStructured(call, code: "INFERENCE_ERROR", message: "Missing required inputTensor fields: data, dims")
-            return
-        }
-
-        let inputData = inputDataRaw.compactMap { $0 as? Double }.map { Float($0) }
-        if inputData.count != inputDataRaw.count {
-            rejectStructured(call, code: "INFERENCE_ERROR", message: "Invalid inputTensor.data: values must be numeric")
-            return
-        }
-
-        let inputDims = inputDimsRaw.compactMap { ($0 as? NSNumber)?.int64Value }
-        if inputDims.count != inputDimsRaw.count || inputDims.contains(where: { $0 <= 0 }) {
-            rejectStructured(call, code: "INFERENCE_ERROR", message: "Invalid inputTensor.dims: all dimensions must be positive integers")
+        guard let inputs = Self.parseTensorMap(inputsObj), !inputs.isEmpty else {
+            rejectStructured(call, code: "INFERENCE_ERROR", message: "Invalid inputs: each entry must include numeric data and positive dims")
             return
         }
 
@@ -140,15 +126,14 @@ public class CapacitorOnnxPlugin: CAPPlugin {
             do {
                 let startMs = currentTimeMs()
                 let result = try inferenceService.run(
-                    modelId: modelId, version: version,
-                    inputData: inputData, inputDims: inputDims, inputType: inputType
+                    modelId: modelId, version: version, inputs: inputs
                 )
+                var outputs: [String: Any] = [:]
+                for (name, tensor) in result {
+                    outputs[name] = Self.tensorToDict(tensor)
+                }
                 call.resolve([
-                    "logits": [
-                        "data": result.data.map { Double($0) },
-                        "dims": result.dims.map { NSNumber(value: $0) },
-                        "type": result.type,
-                    ],
+                    "outputs": outputs,
                     "latencyMs": currentTimeMs() - startMs,
                 ])
             } catch {
@@ -200,11 +185,24 @@ public class CapacitorOnnxPlugin: CAPPlugin {
         return Date().timeIntervalSince1970 * 1000
     }
 
-    private static func parseWarmupInput(_ json: [String: Any]) -> RawTensorInternal? {
-        guard let type = json["type"] as? String, type == "float32" else { return nil }
-        guard let dataRaw = json["data"] as? [Any], let dimsRaw = json["dims"] as? [Any] else { return nil }
+    private static func parseTensorMap(_ obj: [String: Any]) -> [String: RawTensorInternal]? {
+        var result: [String: RawTensorInternal] = [:]
+        for (name, value) in obj {
+            guard let tensorObj = value as? [String: Any],
+                  let tensor = parseTensor(tensorObj) else {
+                return nil
+            }
+            result[name] = tensor
+        }
+        return result
+    }
 
-        let data = dataRaw.compactMap { $0 as? Double }.map { Float($0) }
+    private static func parseTensor(_ json: [String: Any]) -> RawTensorInternal? {
+        guard let type = json["type"] as? String, !type.isEmpty else { return nil }
+        guard let dataRaw = json["data"] as? [Any],
+              let dimsRaw = json["dims"] as? [Any] else { return nil }
+
+        let data = dataRaw.compactMap { ($0 as? NSNumber)?.doubleValue }
         guard data.count == dataRaw.count else { return nil }
 
         let dims = dimsRaw.compactMap { ($0 as? NSNumber)?.int64Value }
@@ -214,5 +212,13 @@ public class CapacitorOnnxPlugin: CAPPlugin {
         guard elementCount == Int64(data.count) else { return nil }
 
         return RawTensorInternal(data: data, dims: dims, type: type)
+    }
+
+    private static func tensorToDict(_ tensor: RawTensorInternal) -> [String: Any] {
+        return [
+            "data": tensor.data,
+            "dims": tensor.dims.map { NSNumber(value: $0) },
+            "type": tensor.type,
+        ]
     }
 }

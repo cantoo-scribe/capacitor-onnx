@@ -4,3 +4,9 @@ project(':capacitor-android').projectDir = new File('../node_modules/.pnpm/@capa
 
 include ':cantoo-capacitor-onnx'
 project(':cantoo-capacitor-onnx').projectDir = new File('../../../android')
+
+include ':capacitor-file-transfer'
+project(':capacitor-file-transfer').projectDir = new File('../node_modules/.pnpm/@capacitor+file-transfer@1.0.12_@capacitor+core@7.6.2/node_modules/@capacitor/file-transfer/android')
+
+include ':capacitor-filesystem'
+project(':capacitor-filesystem').projectDir = new File('../node_modules/.pnpm/@capacitor+filesystem@7.1.8_@capacitor+core@7.6.2/node_modules/@capacitor/filesystem/android')

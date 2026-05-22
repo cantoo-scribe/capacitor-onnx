@@ -2,6 +2,7 @@ import type { LoadModelResult, RunResult } from "@cantoo/capacitor-onnx";
 import { CapacitorOnnx } from "@cantoo/capacitor-onnx";
 import { Capacitor } from "@capacitor/core";
 
+import { ensureLocalModel, type LocalModel } from "./model-download";
 import "./style.css";
 
 type AssertionResult = {
@@ -13,13 +14,19 @@ type AssertionResult = {
 type LoadConfig = {
   modelId: string;
   version: string;
-  filePath?: string;
-  modelUrl?: string;
+  modelUrl: string;
+};
+
+type PreparedModel = {
+  loadModel: LoadModelResult;
+  /** Present on native: the downloaded/cached model file. Absent on web. */
+  localModel?: LocalModel;
 };
 
 type RunInferenceConfig = {
   modelId: string;
   version: string;
+  inputName: string;
   normalizedData: number[];
 };
 
@@ -40,7 +47,9 @@ type NormalizedPluginError = {
   raw: unknown;
 };
 
-const loadModelInFlight = new Map<string, Promise<LoadModelResult>>();
+const loadModelInFlight = new Map<string, Promise<PreparedModel>>();
+
+const DEFAULT_MODEL_URL = "https://download.cantoo.fr/recognition/models/fr/model.onnx";
 let isModelLoading = false;
 
 function makeRampData(length: number): number[] {
@@ -113,15 +122,16 @@ app.innerHTML = `
           Version
           <input id="input-version" value="1.0.0" />
         </label>
+        <label>
+          Input name
+          <input id="input-tensor-name" value="input_values" />
+        </label>
         <label class="wide">
-          ${
-            isWebPlatform
-              ? "Model URL (web fetches bytes)"
-              : "Native filePath (absolute or file://)"
-          }
+          Model URL
           <input
             id="input-model-source"
-            placeholder="${isWebPlatform ? "https://.../model.onnx" : "/absolute/path/to/model.onnx"}"
+            value="${DEFAULT_MODEL_URL}"
+            placeholder="https://.../model.onnx"
           />
         </label>
         <label class="wide">
@@ -179,10 +189,10 @@ function parseCsvNumbers(raw: string): number[] {
 function parseTensorData(raw: string): number[] {
   const values = parseCsvNumbers(raw);
   if (values.length === 0) {
-    throw new Error("inputTensor.data is required");
+    throw new Error("input tensor data is required");
   }
   if (values.some((value) => Number.isNaN(value) || !Number.isFinite(value))) {
-    throw new Error("inputTensor.data must contain only finite numeric values");
+    throw new Error("input tensor data must contain only finite numeric values");
   }
   return values;
 }
@@ -274,6 +284,7 @@ function assertion(name: string, ok: boolean, details?: unknown): AssertionResul
 function getFormFields() {
   const modelIdInput = document.querySelector<HTMLInputElement>("#input-model-id");
   const versionInput = document.querySelector<HTMLInputElement>("#input-version");
+  const inputNameInput = document.querySelector<HTMLInputElement>("#input-tensor-name");
   const sourceInput = document.querySelector<HTMLInputElement>("#input-model-source");
   const normalizedInput = document.querySelector<HTMLTextAreaElement>(
     "#input-normalized-data",
@@ -296,6 +307,7 @@ function getFormFields() {
   if (
     !modelIdInput ||
     !versionInput ||
+    !inputNameInput ||
     !sourceInput ||
     !normalizedInput ||
     !mockSampleRateInput ||
@@ -311,6 +323,7 @@ function getFormFields() {
   return {
     modelIdInput,
     versionInput,
+    inputNameInput,
     sourceInput,
     normalizedInput,
     mockSampleRateInput,
@@ -336,9 +349,7 @@ function applyPreset(presetId: string) {
   writeOutput({
     operation: "apply-preset",
     preset: preset.label,
-    note: isWebPlatform
-      ? "Preset applied. Fill model URL, then click Load model and Run inference."
-      : "Preset applied. Fill the native filePath, then click Load model and Run inference.",
+    note: "Preset applied. Set the model URL, then click Load model and Run inference.",
   });
 }
 
@@ -347,24 +358,21 @@ function getLoadConfigFromForm(): LoadConfig {
 
   const modelId = modelIdInput.value.trim();
   const version = versionInput.value.trim();
-  const source = sourceInput.value.trim();
+  const modelUrl = sourceInput.value.trim();
 
-  if (!modelId || !version || !source) {
-    throw new Error("modelId, version and model source are required to load model");
+  if (!modelId || !version || !modelUrl) {
+    throw new Error("modelId, version and model URL are required to load model");
   }
 
-  if (isWebPlatform) {
-    return { modelId, version, modelUrl: source };
-  }
-
-  return { modelId, version, filePath: source };
+  return { modelId, version, modelUrl };
 }
 
 function getRunConfigFromForm(): RunInferenceConfig {
-  const { modelIdInput, versionInput, normalizedInput } = getFormFields();
+  const { modelIdInput, versionInput, inputNameInput, normalizedInput } = getFormFields();
 
   const modelId = modelIdInput.value.trim();
   const version = versionInput.value.trim();
+  const inputName = inputNameInput.value.trim() || "input_values";
   const normalizedData = parseTensorData(normalizedInput.value);
   validateNormalizedAudioLength(normalizedData);
 
@@ -375,12 +383,13 @@ function getRunConfigFromForm(): RunInferenceConfig {
   return {
     modelId,
     version,
+    inputName,
     normalizedData,
   };
 }
 
 function getModelLoadKey(config: LoadConfig): string {
-  return `${config.modelId}::${config.version}::${config.modelUrl ?? config.filePath ?? ""}`;
+  return `${config.modelId}::${config.version}::${config.modelUrl}`;
 }
 
 const loadModelButton = document.querySelector<HTMLButtonElement>("#btn-load-model");
@@ -436,7 +445,7 @@ async function fetchModelBuffer(url: string): Promise<Uint8Array> {
   return new Uint8Array(buffer);
 }
 
-async function ensureModelPrepared(config: LoadConfig): Promise<LoadModelResult> {
+async function ensureModelPrepared(config: LoadConfig): Promise<PreparedModel> {
   const key = getModelLoadKey(config);
   const existing = loadModelInFlight.get(key);
   if (existing) {
@@ -444,27 +453,26 @@ async function ensureModelPrepared(config: LoadConfig): Promise<LoadModelResult>
   }
 
   setModelLoading(true);
-  const preparePromise = (async () => {
+  const preparePromise = (async (): Promise<PreparedModel> => {
     if (isWebPlatform) {
-      if (!config.modelUrl) {
-        throw new Error("modelUrl is required on web");
-      }
+      // Web has no filesystem: fetch the model bytes into memory.
       const modelBuffer = await fetchModelBuffer(config.modelUrl);
-      return CapacitorOnnx.loadModel({
+      const loadModel = await CapacitorOnnx.loadModel({
         modelId: config.modelId,
         version: config.version,
         modelBuffer,
       });
+      return { loadModel };
     }
 
-    if (!config.filePath) {
-      throw new Error("filePath is required on native");
-    }
-    return CapacitorOnnx.loadModel({
+    // Native: download the model to the filesystem and load it by absolute path.
+    const localModel = await ensureLocalModel(config.modelUrl);
+    const loadModel = await CapacitorOnnx.loadModel({
       modelId: config.modelId,
       version: config.version,
-      filePath: config.filePath,
+      filePath: localModel.path,
     });
+    return { loadModel, localModel };
   })();
 
   loadModelInFlight.set(key, preparePromise);
@@ -521,14 +529,17 @@ loadModelButton.addEventListener("click", async () => {
     }
 
     const config = getLoadConfigFromForm();
-    const loadModel = await ensureModelPrepared(config);
+    const prepared = await ensureModelPrepared(config);
 
     writeOutput({
       platform: Capacitor.getPlatform(),
       operation: "load-model",
-      passed: loadModel.sessionReady === true,
+      passed: prepared.loadModel.sessionReady === true,
       durationMs: Date.now() - startedAt,
-      loadModel,
+      modelFile: prepared.localModel
+        ? { path: prepared.localModel.path, status: prepared.localModel.status }
+        : { source: "web", note: "fetched into memory as modelBuffer" },
+      loadModel: prepared.loadModel,
     });
   } catch (error) {
     writeOutput({
@@ -553,18 +564,23 @@ successE2EButton.addEventListener("click", async () => {
     const inference: RunResult = await CapacitorOnnx.run({
       modelId: config.modelId,
       version: config.version,
-      inputTensor: {
-        data: config.normalizedData,
-        dims: [1, config.normalizedData.length],
-        type: "float32",
+      inputs: {
+        [config.inputName]: {
+          data: config.normalizedData,
+          dims: [1, config.normalizedData.length],
+          type: "float32",
+        },
       },
     });
 
+    const outputEntries = Object.entries(inference.outputs);
+    const firstOutput = outputEntries[0]?.[1];
+
     const assertions: AssertionResult[] = [
       assertion(
-        "runInference.logits.type",
-        inference.logits.type === "float32",
-        inference.logits.type,
+        "runInference returns at least one output",
+        outputEntries.length > 0,
+        outputEntries.map(([name]) => name),
       ),
       assertion(
         "runInference.latencyMs is numeric",
@@ -582,9 +598,10 @@ successE2EButton.addEventListener("click", async () => {
       durationMs: Date.now() - startedAt,
       assertions,
       inferenceSummary: {
-        logitsType: inference.logits.type,
-        logitsDims: inference.logits.dims,
-        logitsLength: inference.logits.data.length,
+        outputNames: outputEntries.map(([name]) => name),
+        firstOutputType: firstOutput?.type,
+        firstOutputDims: firstOutput?.dims,
+        firstOutputLength: firstOutput?.data.length,
       },
     });
   } catch (error) {
@@ -638,10 +655,12 @@ errorE2EButton.addEventListener("click", async () => {
     await CapacitorOnnx.run({
       modelId: "missing-model",
       version: "0.0.0",
-      inputTensor: {
-        data: [0, 0, 0, 0],
-        dims: [1, 4],
-        type: "float32",
+      inputs: {
+        input: {
+          data: [0, 0, 0, 0],
+          dims: [1, 4],
+          type: "float32",
+        },
       },
     });
 

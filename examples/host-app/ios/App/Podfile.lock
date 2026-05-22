@@ -1,0 +1,61 @@
+PODS:
+  - CantooCapacitorOnnx (2.0.0):
+    - Capacitor
+    - onnxruntime-objc (~> 1.24)
+  - Capacitor (7.6.5):
+    - CapacitorCordova
+  - CapacitorCordova (7.6.5)
+  - CapacitorFilesystem (7.1.8):
+    - Capacitor
+    - IONFilesystemLib (~> 1.1.1)
+  - CapacitorFileTransfer (1.0.12):
+    - Capacitor
+    - IONFileTransferLib (~> 1.0.3)
+  - IONFilesystemLib (1.1.2)
+  - IONFileTransferLib (1.0.3)
+  - onnxruntime-c (1.26.0)
+  - onnxruntime-objc (1.26.0):
+    - onnxruntime-objc/Core (= 1.26.0)
+  - onnxruntime-objc/Core (1.26.0):
+    - onnxruntime-c (= 1.26.0)
+
+DEPENDENCIES:
+  - CantooCapacitorOnnx (from `../../../..`)
+  - "Capacitor (from `../../node_modules/.pnpm/@capacitor+ios@7.6.5_@capacitor+core@7.6.2/node_modules/@capacitor/ios`)"
+  - "CapacitorCordova (from `../../node_modules/.pnpm/@capacitor+ios@7.6.5_@capacitor+core@7.6.2/node_modules/@capacitor/ios`)"
+  - "CapacitorFilesystem (from `../../node_modules/.pnpm/@capacitor+filesystem@7.1.8_@capacitor+core@7.6.2/node_modules/@capacitor/filesystem`)"
+  - "CapacitorFileTransfer (from `../../node_modules/.pnpm/@capacitor+file-transfer@1.0.12_@capacitor+core@7.6.2/node_modules/@capacitor/file-transfer`)"
+
+SPEC REPOS:
+  trunk:
+    - IONFilesystemLib
+    - IONFileTransferLib
+    - onnxruntime-c
+    - onnxruntime-objc
+
+EXTERNAL SOURCES:
+  CantooCapacitorOnnx:
+    :path: "../../../.."
+  Capacitor:
+    :path: "../../node_modules/.pnpm/@capacitor+ios@7.6.5_@capacitor+core@7.6.2/node_modules/@capacitor/ios"
+  CapacitorCordova:
+    :path: "../../node_modules/.pnpm/@capacitor+ios@7.6.5_@capacitor+core@7.6.2/node_modules/@capacitor/ios"
+  CapacitorFilesystem:
+    :path: "../../node_modules/.pnpm/@capacitor+filesystem@7.1.8_@capacitor+core@7.6.2/node_modules/@capacitor/filesystem"
+  CapacitorFileTransfer:
+    :path: "../../node_modules/.pnpm/@capacitor+file-transfer@1.0.12_@capacitor+core@7.6.2/node_modules/@capacitor/file-transfer"
+
+SPEC CHECKSUMS:
+  CantooCapacitorOnnx: 395ef660c1049316e0a59b81399b251062665ebe
+  Capacitor: e9708b186e71dc45f9b2ee72e826b7389fb79ff2
+  CapacitorCordova: 2b36392a7292c3c451dcae154185ee8804d7b6b3
+  CapacitorFilesystem: c63fc54df41e5a6761785a7f3c49dc696c22e296
+  CapacitorFileTransfer: b93157cf0d7dd21d9d30c84be9b6adf95195d469
+  IONFilesystemLib: 21a63377696b2d8fab5632ecfb7d2ac67bddb68a
+  IONFileTransferLib: addbbf50405c163dcd74a7b1bd8c6f9302342be2
+  onnxruntime-c: e6e9272f5996fed3ea3ca3c9bc843478b2ecbc73
+  onnxruntime-objc: 63687acb8d78c35dd0ab097abf755b1f3dc468c7
+
+PODFILE CHECKSUM: e334b11eda4de880cbf6b0d00bd88b1cb46650bd
+
+COCOAPODS: 1.16.2

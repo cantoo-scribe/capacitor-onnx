@@ -119,6 +119,9 @@ Also record:
 ### ORT format
 - Converting ONNX to ORT format can reduce initialization cost and improve runtime.
 - Trade-off: more complex build/deploy pipeline.
+- This plugin can produce a Runtime-style `.ort` alongside a **reduced** (op-trimmed)
+  `libonnxruntime.so` via the `cantoo-onnx-reduce` command — see
+  [reduced-onnx.md](reduced-onnx.md). Android-only, opt-in.
 
 ### Removing unnecessary outputs
 - Reduces transfer and post-processing.

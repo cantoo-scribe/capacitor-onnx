@@ -24,13 +24,17 @@
     },
     "./package.json": "./package.json"
   },
+  "bin": {
+    "cantoo-onnx-reduce": "reduce/cli.mjs"
+  },
   "files": [
     "android/src",
     "android/build.gradle",
     "ios/Plugin",
     "Package.swift",
     "CantooCapacitorOnnx.podspec",
-    "dist"
+    "dist",
+    "reduce"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

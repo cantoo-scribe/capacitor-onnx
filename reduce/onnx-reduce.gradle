@@ -1,0 +1,333 @@
+// onnx-reduce.gradle — opt-in, model-driven reduced ONNX Runtime build.
+//
+// Applied from app/build.gradle. When the consuming app opts in by setting the
+// `onnxModel` Gradle property, this resolves (or produces) a reduced
+// libonnxruntime AAR that contains ONLY the operators used by that specific
+// model, and exposes its path so the app can link it in place of the full
+// Maven artifact (com.microsoft.onnxruntime:onnxruntime-android).
+//
+// Rationale: @cantoo/capacitor-onnx is shared across consumers (each with a
+// different model — e.g. a partner uses an int64 + attention_mask model). A
+// fixed reduced .so in the plugin would break them. Driving the reduction from
+// the consumer's own model keeps every consumer isolated: each materializes the
+// runtime for its own op-set. Opting out (no property) keeps the full Maven AAR.
+//
+// All caches live under android/.cache/ (git-ignored) so they SURVIVE the
+// `./gradlew clean` that the build-android scripts run — `build/` would not.
+//
+// NOTE: the reduced build cannot trim a prebuilt .so — operator inclusion is a
+// C++ compile-time decision. So a true cache-miss recompiles ORT from source
+// (30–60 min). The local + remote caches keyed by a content hash ensure only
+// the FIRST builder of a given (model op-set + ORT version + abis + nnapi) pays
+// that cost; everyone else downloads the AAR.
+
+import java.security.MessageDigest
+
+ext.onnx = [:]
+
+// ---- Parameters (see android/gradle.properties and packages/mobile/README.md) ----
+def prop = { String name, String fallback = '' ->
+    project.hasProperty(name) ? project.property(name).toString().trim() : fallback
+}
+
+ext.onnx.model      = prop('onnxModel')                 // path|url, empty = opt-out
+// NNAPI is ALWAYS compiled in (no opt-out). build-reduced-onnx.sh grafts our
+// reduced .so into the official AAR, whose libonnxruntime4j_jni.so has a hard
+// reference to OrtSessionOptionsAppendExecutionProvider_Nnapi. A CPU-only .so
+// would lack that symbol → UnsatisfiedLinkError at load. A genuine CPU-only build
+// would require rebuilding the JNI via --build_java, which the script avoids on
+// JDK 21. Having the NNAPI EP present is cheap and only used if a session opts in.
+ext.onnx.ortVersion = prop('onnxOrtVersion', '1.25.1')  // MUST match the plugin's dep
+ext.onnx.cacheUrl   = prop('onnxCacheUrl')              // read-only AAR store (GET only), empty = disabled
+// rsync/ssh upload target (e.g. user@host:/path/.../android). Empty = no auto-upload
+// (falls back to printing manual instructions). The GET cacheUrl and this UPLOAD
+// target are different hosts, so they are separate properties.
+ext.onnx.cacheUploadUrl = prop('onnxCacheUploadUrl')
+// rsync/ssh target for the model.ort FILE (the Runtime-style ORT model the app
+// loads). Empty = don't publish (keep it only locally). Separate from
+// cacheUploadUrl, which is the per-hash AAR cache dir.
+ext.onnx.ortUploadUrl = prop('onnxOrtUploadUrl')
+ext.onnx.python     = prop('onnxPython', 'python3')     // interpreter with onnxruntime (e.g. a .venv)
+ext.onnx.enabled    = !ext.onnx.model.isEmpty()
+
+// ABIs kept in sync with app/build.gradle's abiFilters.
+def ABIS = ['arm64-v8a', 'armeabi-v7a']
+
+// Anchor on the Gradle root (packages/mobile/android) so paths are stable
+// regardless of which subproject applies this script.
+def androidRoot = rootProject.projectDir
+def cacheRoot   = new File(androidRoot, '.cache')
+def modelsCache = new File(cacheRoot, 'onnx-models')
+def aarCache    = new File(cacheRoot, 'onnx-reduced')
+
+// ---- Helpers -----------------------------------------------------------------
+
+def sha256 = { String s ->
+    MessageDigest.getInstance('SHA-256').digest(s.getBytes('UTF-8')).encodeHex().toString()
+}
+
+// Resolve the build-time model file. Local path → used directly. URL → cached
+// once under .cache/onnx-models/<sha(url)> to avoid re-downloading ~122 MB.
+def resolveModelFile = { String modelRef ->
+    if (modelRef =~ /^https?:\/\//) {
+        modelsCache.mkdirs()
+        def cached = new File(modelsCache, sha256(modelRef) + '.onnx')
+        if (!cached.exists()) {
+            logger.lifecycle("[onnx-reduce] downloading model → ${cached.name}")
+            exec {
+                commandLine 'curl', '-fSL', '--retry', '3', '-o', cached.absolutePath, modelRef
+            }
+        } else {
+            logger.lifecycle("[onnx-reduce] model cache hit → ${cached.name}")
+        }
+        return cached
+    }
+    // Local path. Resolve relative paths against the android root (rootProject)
+    // so the base is stable regardless of which subproject applies this script;
+    // an ABSOLUTE path is safest and avoids ambiguity.
+    def f = rootProject.file(modelRef)
+    if (!f.exists()) throw new GradleException("[onnx-reduce] model not found: ${modelRef} (resolved: ${f.absolutePath})")
+    return f
+}
+
+// Generate the reduced-build operator config for the model via the ORT python
+// tooling. `convert_onnx_models_to_ort` optimizes the model and writes a
+// `<stem>.required_operators.config` (plus .ort files we don't need for
+// Option A) — the config is generated from the OPTIMIZED graph, so it already
+// captures the fused `com.microsoft` contrib ops the runtime produces.
+//
+// The plugin creates sessions with OptLevel.ALL_OPT, so the runtime may fuse
+// ops (Erf→Gelu, MatMulInteger→MatMulIntegerToFloat, LayerNormalization→
+// SkipLayerNormalization). To guarantee the reduced .so has a kernel for
+// whatever the runtime ends up with — fused or not, CPU or NNAPI — we generate
+// the config as the UNION of both optimization styles:
+//   - Fixed   → the fully-fused state (matches CPU ALL_OPT).
+//   - Runtime → keeps un-fused ops + runtime-deferred opts (NNAPI/CoreML path).
+// `--target_platform arm` aligns arch-dependent fusions with the arm device
+// rather than the host the config is generated on.
+//
+// NOTE: the model positional MUST precede `--optimization_style` (nargs='+'),
+// otherwise argparse greedily consumes it as a style value.
+//
+// The tool emits TWO configs and neither is the full union on its own:
+//   - <stem>.required_operators.config             (Fixed)   → fused com.microsoft ops,
+//                                                               but drops Erf/MatMulInteger/…
+//   - <stem>.required_operators.with_runtime_opt.config (Runtime) → the pre-fusion ai.onnx
+//                                                               ops, but no com.microsoft ops
+// We MERGE both into the union so the .so has a kernel for whatever the runtime ends up
+// with — fully fused (CPU/ALL_OPT) or partially un-fused (NNAPI leaves nodes on CPU).
+def mergeConfigs = { List<File> configs, File outConfig ->
+    def byKey = [:]  // "domain;opset" -> sorted set of op names
+    configs.each { cfg ->
+        cfg.readLines().each { line ->
+            def t = line.trim()
+            if (t.isEmpty() || t.startsWith('#')) return
+            def parts = t.split(';')
+            if (parts.length < 3) return
+            def ops = byKey.computeIfAbsent("${parts[0]};${parts[1]}".toString(), { new TreeSet<String>() })
+            parts[2].split(',').each { ops.add(it.trim()) }
+        }
+    }
+    // Deterministic (sorted) so the cache hash is stable across runs.
+    outConfig.text = byKey.collect { k, ops -> "${k};${ops.join(',')}" }.sort().join('\n') + '\n'
+}
+
+// Produces the op-config AND keeps the Runtime-style .ort (the app loads the .ort
+// so its runtime op-set is fixed by the file, instead of being re-derived per
+// platform). The .with_runtime_opt.ort is the right one for the plugin's hardcoded
+// ALL_OPT (its deferred optimizations are applied at load).
+def generateOpConfig = { File modelFile, File outConfig, File outOrt ->
+    outConfig.parentFile.mkdirs()
+    def tmpDir = new File(outConfig.parentFile, outConfig.name + '.tmp')
+    tmpDir.deleteDir(); tmpDir.mkdirs()
+    logger.lifecycle("[onnx-reduce] generating operator config (Fixed ∪ Runtime) + .ort")
+    exec {
+        commandLine onnx.python, '-m', 'onnxruntime.tools.convert_onnx_models_to_ort',
+                    modelFile.absolutePath,
+                    '--output_dir', tmpDir.absolutePath,
+                    '--target_platform', 'arm',
+                    '--optimization_style', 'Fixed', 'Runtime'
+    }
+    def configs = (tmpDir.listFiles() ?: []).findAll { it.name.endsWith('.config') }
+    if (configs.isEmpty()) throw new GradleException("[onnx-reduce] no operator config produced in ${tmpDir}")
+    mergeConfigs(configs, outConfig)
+    // Keep the Runtime-style .ort; drop the rest (incl. the Fixed .ort + configs).
+    def runtimeOrt = (tmpDir.listFiles() ?: []).find { it.name.endsWith('.with_runtime_opt.ort') }
+    if (runtimeOrt == null) throw new GradleException("[onnx-reduce] no .with_runtime_opt.ort produced in ${tmpDir}")
+    outOrt.parentFile.mkdirs()
+    runtimeOrt.renameTo(outOrt) || (outOrt.bytes = runtimeOrt.bytes)
+    tmpDir.deleteDir()
+}
+
+// The config's comment header records the (temp) source path, which varies per
+// run — strip comments so the hash depends only on the operator list.
+def opConfigSignature = { File cfg ->
+    cfg.readLines().findAll { !it.trim().startsWith('#') && !it.trim().isEmpty() }.join('\n')
+}
+
+// Try to pull a prebuilt AAR for this hash from the remote store (read-only).
+// Returns true on success. Missing/404 → false (triggers a source build).
+// Populating the store is intentionally MANUAL (e.g. rsync the built .aar up),
+// so there is no upload here — the cache is GET-only.
+def tryRemoteDownload = { String hash, File destAar ->
+    if (onnx.cacheUrl.isEmpty()) return false
+    def url = "${onnx.cacheUrl.replaceAll('/$', '')}/${hash}/onnxruntime-android.aar"
+    destAar.parentFile.mkdirs()
+    logger.lifecycle("[onnx-reduce] checking remote cache → ${url}")
+    def result = exec {
+        ignoreExitValue = true
+        commandLine 'curl', '-fSL', '-o', destAar.absolutePath, url
+    }
+    return result.exitValue == 0 && destAar.exists() && destAar.length() > 0
+}
+
+// Push a freshly built AAR to the remote cache so others hit tryRemoteDownload.
+// Best-effort: any failure (no SSH access, unknown host, rsync missing) returns
+// false → caller prints the manual-upload alert. Never throws, never blocks the
+// build. BatchMode + ConnectTimeout so it fails fast instead of prompting.
+def uploadReducedAar = { String hash, File aar ->
+    if (onnx.cacheUploadUrl.isEmpty()) return false
+    def base = onnx.cacheUploadUrl.replaceAll('/$', '')   // user@host:/path/.../android
+    def host = base.substring(0, base.indexOf(':'))
+    def path = base.substring(base.indexOf(':') + 1)
+    def remoteDir = "${path}/${hash}"
+    def sshOpts = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
+    logger.lifecycle("[onnx-reduce] uploading AAR to remote cache → ${base}/${hash}/")
+    def mk = exec {
+        ignoreExitValue = true
+        commandLine(['ssh'] + sshOpts + [host, "mkdir -p '${remoteDir}'"])
+    }
+    if (mk.exitValue != 0) return false
+    def rs = exec {
+        ignoreExitValue = true
+        commandLine 'rsync', '-e', "ssh ${sshOpts.join(' ')}", '-az',
+                    '--no-perms', '--no-owner', '--no-group',
+                    aar.absolutePath, "${host}:${remoteDir}/onnxruntime-android.aar"
+    }
+    return rs.exitValue == 0
+}
+
+// Publish the Runtime-style model.ort to its serving location so the app can
+// download it. Best-effort and gated by ortUploadUrl (a FILE rsync target);
+// empty → no publish. Never throws/blocks. Mirrors uploadReducedAar.
+def uploadOrtModel = { File ort ->
+    if (onnx.ortUploadUrl.isEmpty()) return
+    def target = onnx.ortUploadUrl   // user@host:/path/.../model.ort
+    def host = target.substring(0, target.indexOf(':'))
+    def remotePath = target.substring(target.indexOf(':') + 1)
+    def sshOpts = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
+    logger.lifecycle("[onnx-reduce] uploading model.ort → ${target}")
+    def mk = exec {
+        ignoreExitValue = true
+        commandLine(['ssh'] + sshOpts + [host, "mkdir -p '${new File(remotePath).parent}'"])
+    }
+    def ok = false
+    if (mk.exitValue == 0) {
+        def rs = exec {
+            ignoreExitValue = true
+            commandLine 'rsync', '-e', "ssh ${sshOpts.join(' ')}", '-az',
+                        '--no-perms', '--no-owner', '--no-group', ort.absolutePath, target
+        }
+        ok = rs.exitValue == 0
+    }
+    if (ok) {
+        logger.lifecycle("[onnx-reduce] model.ort published")
+    } else {
+        logger.lifecycle("[onnx-reduce] model.ort upload skipped/failed. Publish manually:")
+        logger.lifecycle("[onnx-reduce]   ${ort}")
+        logger.lifecycle("[onnx-reduce]   → ${target}")
+    }
+}
+
+// Compile ORT from source with the reduced op config. The heavy path.
+def buildFromSource = { File opConfig, File destAar ->
+    destAar.parentFile.mkdirs()
+    // Resolve the build script across layouts: a partner install is self-contained
+    // under android/onnx/, while this monorepo keeps it in ../scripts/. First wins.
+    def script = [
+        new File(androidRoot, 'onnx/build-reduced-onnx.sh'),
+        new File(androidRoot, '../scripts/build-reduced-onnx.sh'),
+    ].find { it.exists() }
+    if (script == null) {
+        throw new GradleException("[onnx-reduce] build-reduced-onnx.sh not found (looked in onnx/ and ../scripts/)")
+    }
+    logger.lifecycle("[onnx-reduce] CACHE MISS — building reduced ORT from source (30–60 min)")
+    exec {
+        commandLine 'bash', script.absolutePath
+        environment 'ORT_VERSION', onnx.ortVersion
+        environment 'ORT_ABIS', ABIS.join(',')
+        environment 'ORT_OP_CONFIG', opConfig.absolutePath
+        environment 'ORT_USE_NNAPI', '1'   // always on — see note near the top
+        environment 'ORT_OUT_AAR', destAar.absolutePath
+        // Pin the ORT source checkout to the cache root so it's deterministic
+        // regardless of where the build script lives (the script honors this).
+        environment 'ORT_SRC_DIR', new File(cacheRoot, 'ort-src').absolutePath
+        environment 'PYTHON', onnx.python
+    }
+    if (!destAar.exists()) throw new GradleException("[onnx-reduce] build did not produce ${destAar}")
+}
+
+// Resolve the reduced AAR, materializing it if needed. Called at configuration
+// time from app/build.gradle so the path is known for `implementation files()`.
+// Cheap on a cache hit (hash + file check + optional curl); only a full miss is
+// expensive. Returns the AAR File, or null when opted out.
+ext.onnx.resolveReducedAar = {
+    if (!onnx.enabled) return null
+
+    def modelFile = resolveModelFile(onnx.model)
+
+    // Op config is cheap to regenerate; key it by model content so we skip when
+    // unchanged. (Hashing the model file path+length+mtime keeps it fast.)
+    def modelKey = sha256("${modelFile.absolutePath}:${modelFile.length()}:${modelFile.lastModified()}")
+    def opConfig = new File(aarCache, "configs/${modelKey}.config")
+    def ortModel = new File(aarCache, "ort/${modelKey}.ort")
+    // Generate the config (and Runtime .ort) on a config miss, or when we intend to
+    // publish but the .ort isn't present yet. The convert step is fast.
+    def ortGenerated = false
+    if (!opConfig.exists() || (!onnx.ortUploadUrl.isEmpty() && !ortModel.exists())) {
+        generateOpConfig(modelFile, opConfig, ortModel)
+        ortGenerated = true
+    }
+    // Publish the freshly (re)generated .ort once (best-effort, only with a target
+    // set). Steady-state builds (nothing regenerated) skip the 122 MB upload.
+    if (ortGenerated && !onnx.ortUploadUrl.isEmpty() && ortModel.exists()) uploadOrtModel(ortModel)
+
+    def hash = sha256([
+        opConfigSignature(opConfig),
+        onnx.ortVersion,
+        ABIS.join(','),
+        'nnapi',   // NNAPI always compiled in; literal keeps the cache hash stable
+    ].join('|')).substring(0, 16)
+
+    def destAar = new File(aarCache, "${hash}/onnxruntime-android.aar")
+
+    // a. local cache
+    if (destAar.exists() && destAar.length() > 0) {
+        logger.lifecycle("[onnx-reduce] local AAR cache hit (${hash})")
+        return destAar
+    }
+    // b. remote cache
+    if (tryRemoteDownload(hash, destAar)) {
+        logger.lifecycle("[onnx-reduce] remote AAR cache hit (${hash})")
+        return destAar
+    }
+    // c. build from source, then auto-upload to the remote cache so the next
+    //    consumer hits step b. If no upload target is set, or the upload fails
+    //    (no SSH access, unknown host, …), fall back to printing the manual path.
+    buildFromSource(opConfig, destAar)
+    if (!onnx.cacheUploadUrl.isEmpty() && uploadReducedAar(hash, destAar)) {
+        logger.lifecycle("[onnx-reduce] uploaded to remote cache (${hash}) — next build will hit it")
+    } else if (!onnx.cacheUrl.isEmpty()) {
+        def upPath = "${onnx.cacheUrl.replaceAll('/$', '')}/${hash}/onnxruntime-android.aar"
+        logger.lifecycle("[onnx-reduce] auto-upload skipped/failed. To share it, upload manually:")
+        logger.lifecycle("[onnx-reduce]   ${destAar}")
+        logger.lifecycle("[onnx-reduce]   → ${upPath}")
+    }
+    return destAar
+}
+
+if (onnx.enabled) {
+    logger.lifecycle("[onnx-reduce] ENABLED — model=${onnx.model} ort=${onnx.ortVersion} (nnapi always on)")
+} else {
+    logger.lifecycle("[onnx-reduce] disabled (opt-out) — using full Maven onnxruntime-android")
+}

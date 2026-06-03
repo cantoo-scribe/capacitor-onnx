@@ -188,8 +188,40 @@ await CapacitorOnnx.release({ modelId: 'demo-model', version: '1.0.0' });
 - **Output shape & dtype**: each `RunResult.outputs` tensor carries the shape and dtype ORT materialized — Web reads `ort.Tensor.dims`/`.type`, Android reads `OnnxTensor.info.shape`/`.type`, iOS reads `tensorTypeAndShapeInfo().shape`/`.elementType`. No heuristic, no symbolic dims (`-1`) in the result.
 - Errors are normalized with structured fields (`code`, `message`, `retryable`, `correlationId`, `details`).
 
+## Model format: default `.onnx` vs reduced `.ort` (Android)
+
+There are two ways to ship a model, and you pick per app:
+
+### Default — `.onnx` (Android, iOS, Web)
+
+The standard path used in all the examples above: the plugin bundles the **full**
+`onnxruntime-android` AAR (and `onnxruntime-objc`/`onnxruntime-web` on the other
+platforms), and you load a plain **`.onnx`** model. Works everywhere, **no extra tooling
+or setup** — just `loadModel`. This is the default; if you do nothing, you get this.
+
+### Reduced ops — `.ort` (Android only, opt-in)
+
+For Android you can shrink the native runtime by compiling a `libonnxruntime.so` with
+**only your model's operators** (~57–59% smaller on arm64) and loading a pre-optimized
+**`.ort`** model instead of the `.onnx`. It is **opt-in and Android-only**; iOS/Web keep
+the default path.
+
+```bash
+# in your app package (depends on @cantoo/capacitor-onnx)
+pnpm exec cantoo-onnx-reduce      # or: npx cantoo-onnx-reduce
+```
+
+This requires a build toolchain (Python ≥3.10 + `onnxruntime`/`onnx`, Android NDK,
+CMake/Ninja, JDK 21; bash — on Windows use WSL2) and a small amount of app-side wiring
+(load the `.ort`, whose filename must end in `.ort`). It stays fully opt-out — clearing
+`onnxModel` reverts to the full AAR + `.onnx`.
+
+**Full guide:** [docs/reduced-onnx.md](docs/reduced-onnx.md).
+
 ## Docs
 
+- Reduced ONNX Runtime build (smaller Android binary): [docs/reduced-onnx.md](docs/reduced-onnx.md)
+- Android optimization & execution providers: [docs/android-optimization.md](docs/android-optimization.md)
 - Testing scripts and validation flow: [docs/testing-scripts.md](docs/testing-scripts.md)
 
 ## License

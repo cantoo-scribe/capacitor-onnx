@@ -186,6 +186,8 @@ onnxOrtVersion=$ORT_VERSION
 onnxCacheUrl=$CACHE_URL
 onnxCacheUploadUrl=$CACHE_UPLOAD_URL
 onnxOrtUploadUrl=$ORT_UPLOAD_URL
+onnxConfigUrl=$CONFIG_URL
+onnxConfigUploadUrl=$CONFIG_UPLOAD_URL
 onnxPython=$PYTHON_INTERP
 $end
 EOF
@@ -362,6 +364,8 @@ ask PYTHON_INTERP "Python interpreter (with onnxruntime + onnx)" "${PYTHON_DEFAU
 ask CACHE_URL "Remote AAR cache base URL (optional, read-only GET by hash)" ""
 ask CACHE_UPLOAD_URL "Remote AAR UPLOAD target (rsync/ssh, optional; e.g. user@host:/path/android)" ""
 ask ORT_UPLOAD_URL "Remote .ort model UPLOAD target (rsync/ssh file, optional; empty = don't publish)" ""
+ask CONFIG_URL "Remote op-config GET URL (optional; lets consumers skip Python on cache hit)" ""
+ask CONFIG_UPLOAD_URL "Remote op-config UPLOAD target (rsync/ssh file, optional; empty = don't publish)" ""
 
 echo
 bold "==> Installing"

@@ -211,10 +211,13 @@ the default path.
 pnpm exec cantoo-onnx-reduce      # or: npx cantoo-onnx-reduce
 ```
 
-This requires a build toolchain (Python ≥3.10 + `onnxruntime`/`onnx`, Android NDK,
-CMake/Ninja, JDK 21; bash — on Windows use WSL2) and a small amount of app-side wiring
-(load the `.ort`, whose filename must end in `.ort`). It stays fully opt-out — clearing
-`onnxModel` reverts to the full AAR + `.onnx`.
+The **first** build (the "generator") needs a toolchain (Python ≥3.10 + `onnxruntime`/`onnx`,
+Android NDK, CMake/Ninja, JDK 21; bash — on Windows use WSL2) and a small amount of app-side
+wiring (load the `.ort`, whose filename must end in `.ort`). Once the generator publishes the
+op-config, `.ort` and AAR (via the `onnx*UploadUrl` keys), **other devs/CI need none of that
+toolchain** — with `onnxConfigUrl` + `onnxCacheUrl` set, their build just downloads the
+op-config and the prebuilt AAR (no Python, no NDK, no model download). It stays fully opt-out —
+clearing `onnxModel` reverts to the full AAR + `.onnx`.
 
 **Full guide:** [docs/reduced-onnx.md](docs/reduced-onnx.md).
 

@@ -89,20 +89,38 @@ It is interactive and prompts for:
 | `onnxCacheUrl` | Read-only remote AAR cache (GET by content hash). Empty = disabled. |
 | `onnxCacheUploadUrl` | rsync/ssh target to publish the built AAR to the cache. Empty = no publish. |
 | `onnxOrtUploadUrl` | rsync/ssh **file** target to publish the `.ort` model. Empty = no publish. |
-| `onnxPython` | Python interpreter with `onnxruntime`+`onnx` (e.g. a `.venv`). |
+| `onnxConfigUrl` | Read-only GET URL for the op-config. Set it so **consumers skip Python** on a cache hit (see below). Empty = always regenerate locally. |
+| `onnxConfigUploadUrl` | rsync/ssh **file** target to publish the op-config (the generator publishes it for consumers). Empty = no publish. |
+| `onnxPython` | Python interpreter with `onnxruntime`+`onnx` (e.g. a `.venv`). Only the **generator** needs it. |
 
 ## How the build resolves the AAR
 
-At Gradle configuration time `resolveReducedAar()` keys everything by a content hash
-(op-config ∪ ORT version ∪ ABIs ∪ nnapi) and tries, in order:
+The AAR cache hash is `op-config ∪ ORT version ∪ ABIs ∪ nnapi`, so the **op-config** is the
+key everything hinges on. At Gradle configuration time `resolveReducedAar()`:
 
+**First, get the op-config (this is what decides whether you need Python):**
+1. **Local** — `android/.cache/onnx-reduced/configs/<modelKey>.config` (reused if present).
+2. **Remote (consumer fast-path)** — `GET onnxConfigUrl` (if set). Downloading it means the
+   build can compute the hash **without Python and without downloading the ~122 MB model**.
+3. **Generate (generator path)** — only if neither above: download the model and run the ORT
+   Python tooling. This is the **only** step that needs `onnxPython`. The generator then
+   publishes the op-config to `onnxConfigUploadUrl` and the `.ort` to `onnxOrtUploadUrl`
+   (best-effort) so the next person hits step 2.
+
+**Then, resolve the AAR by hash:**
 1. **Local cache** — `android/.cache/onnx-reduced/<hash>/onnxruntime-android.aar`.
 2. **Remote cache** — `GET <onnxCacheUrl>/<hash>/onnxruntime-android.aar` (if set).
-3. **Build from source** — checks out ORT at the pinned tag and compiles the reduced
-   `.so` (~30–60 min, **once** per hash), then auto-uploads to `onnxCacheUploadUrl` if set.
+3. **Build from source** — checks out ORT at the pinned tag and compiles the reduced `.so`
+   (~30–60 min, **once** per hash; needs only the op-config, not the model), then auto-uploads
+   to `onnxCacheUploadUrl` if set.
 
-It also generates the **`.ort`** (Runtime-style) and, if `onnxOrtUploadUrl` is set,
-publishes it. NNAPI is always compiled into the `.so` (the official JNI glue requires the
+> **Generator vs consumer.** The *generator* (whoever has Python + upload creds) runs a build
+> once to populate the op-config, `.ort` and AAR on the server. Everyone else is a *consumer*:
+> with `onnxConfigUrl` + `onnxCacheUrl` set, their build downloads the op-config, computes the
+> hash, and pulls the prebuilt AAR — **no Python, no NDK, no model download**. Leave
+> `onnxConfigUrl` empty to keep the old behavior (always regenerate the config via Python).
+
+NNAPI is always compiled into the `.so` (the official JNI glue requires the
 `OrtSessionOptionsAppendExecutionProvider_Nnapi` symbol); it is only *used* if a session
 opts in. All caches live under `android/.cache/` (git-ignored, survives `gradlew clean`).
 

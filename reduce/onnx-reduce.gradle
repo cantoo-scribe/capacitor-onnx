@@ -47,6 +47,15 @@ ext.onnx.cacheUploadUrl = prop('onnxCacheUploadUrl')
 // loads). Empty = don't publish (keep it only locally). Separate from
 // cacheUploadUrl, which is the per-hash AAR cache dir.
 ext.onnx.ortUploadUrl = prop('onnxOrtUploadUrl')
+// read-only GET URL for the reduced-build operator config (a small text file,
+// sibling of the .ort). When set, a CONSUMER downloads it instead of regenerating
+// it via Python — the op-config is what the AAR cache hash derives from, so having
+// it lets a consumer compute the hash and pull the prebuilt AAR with NO Python,
+// NO NDK and WITHOUT downloading the model. Empty = regenerate locally (needs Python).
+ext.onnx.configUrl  = prop('onnxConfigUrl')
+// rsync/ssh target for that op-config FILE (e.g. user@host:/path/.../model.required_operators.config).
+// Empty = don't publish. A GENERATOR (has Python + creds) publishes it so consumers hit configUrl.
+ext.onnx.configUploadUrl = prop('onnxConfigUploadUrl')
 ext.onnx.python     = prop('onnxPython', 'python3')     // interpreter with onnxruntime (e.g. a .venv)
 ext.onnx.enabled    = !ext.onnx.model.isEmpty()
 
@@ -181,6 +190,19 @@ def tryRemoteDownload = { String hash, File destAar ->
     return result.exitValue == 0 && destAar.exists() && destAar.length() > 0
 }
 
+// Try to fetch the op-config from a fixed URL (consumer fast-path). Returns true
+// on success. Missing/404 → false (caller falls back to generating it via Python).
+def tryDownloadConfig = { String url, File dest ->
+    if (url.isEmpty()) return false
+    dest.parentFile.mkdirs()
+    logger.lifecycle("[onnx-reduce] checking remote op-config → ${url}")
+    def result = exec {
+        ignoreExitValue = true
+        commandLine 'curl', '-fSL', '-o', dest.absolutePath, url
+    }
+    return result.exitValue == 0 && dest.exists() && dest.length() > 0
+}
+
 // Push a freshly built AAR to the remote cache so others hit tryRemoteDownload.
 // Best-effort: any failure (no SSH access, unknown host, rsync missing) returns
 // false → caller prints the manual-upload alert. Never throws, never blocks the
@@ -207,16 +229,18 @@ def uploadReducedAar = { String hash, File aar ->
     return rs.exitValue == 0
 }
 
-// Publish the Runtime-style model.ort to its serving location so the app can
-// download it. Best-effort and gated by ortUploadUrl (a FILE rsync target);
-// empty → no publish. Never throws/blocks. Mirrors uploadReducedAar.
-def uploadOrtModel = { File ort ->
-    if (onnx.ortUploadUrl.isEmpty()) return
-    def target = onnx.ortUploadUrl   // user@host:/path/.../model.ort
+// Publish a single file to a fixed rsync/ssh target — used for both the
+// Runtime-style model.ort (the app downloads it) and the op-config (consumers
+// download it to skip Python). Best-effort and gated by an empty target; any
+// failure (no SSH access, unknown host, rsync missing) just prints a manual hint.
+// Never throws, never blocks. `label` only flavors the log lines. Mirrors
+// uploadReducedAar, which targets a per-hash dir instead of a fixed file.
+def uploadFile = { File f, String target, String label ->
+    if (target == null || target.isEmpty()) return
     def host = target.substring(0, target.indexOf(':'))
     def remotePath = target.substring(target.indexOf(':') + 1)
     def sshOpts = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
-    logger.lifecycle("[onnx-reduce] uploading model.ort → ${target}")
+    logger.lifecycle("[onnx-reduce] uploading ${label} → ${target}")
     def mk = exec {
         ignoreExitValue = true
         commandLine(['ssh'] + sshOpts + [host, "mkdir -p '${new File(remotePath).parent}'"])
@@ -226,15 +250,15 @@ def uploadOrtModel = { File ort ->
         def rs = exec {
             ignoreExitValue = true
             commandLine 'rsync', '-e', "ssh ${sshOpts.join(' ')}", '-az',
-                        '--no-perms', '--no-owner', '--no-group', ort.absolutePath, target
+                        '--no-perms', '--no-owner', '--no-group', f.absolutePath, target
         }
         ok = rs.exitValue == 0
     }
     if (ok) {
-        logger.lifecycle("[onnx-reduce] model.ort published")
+        logger.lifecycle("[onnx-reduce] ${label} published")
     } else {
-        logger.lifecycle("[onnx-reduce] model.ort upload skipped/failed. Publish manually:")
-        logger.lifecycle("[onnx-reduce]   ${ort}")
+        logger.lifecycle("[onnx-reduce] ${label} upload skipped/failed. Publish manually:")
+        logger.lifecycle("[onnx-reduce]   ${f}")
         logger.lifecycle("[onnx-reduce]   → ${target}")
     }
 }
@@ -274,23 +298,37 @@ def buildFromSource = { File opConfig, File destAar ->
 ext.onnx.resolveReducedAar = {
     if (!onnx.enabled) return null
 
-    def modelFile = resolveModelFile(onnx.model)
+    // Key the local op-config/.ort by the MODEL REFERENCE string (URL or path) — stable
+    // across machines and, crucially, computable WITHOUT the model bytes, so a consumer
+    // can reuse a downloaded config and never fetch the ~122 MB model.
+    def refKey = sha256(onnx.model)
+    def opConfig = new File(aarCache, "configs/${refKey}.config")
+    def ortModel = new File(aarCache, "ort/${refKey}.ort")
 
-    // Op config is cheap to regenerate; key it by model content so we skip when
-    // unchanged. (Hashing the model file path+length+mtime keeps it fast.)
-    def modelKey = sha256("${modelFile.absolutePath}:${modelFile.length()}:${modelFile.lastModified()}")
-    def opConfig = new File(aarCache, "configs/${modelKey}.config")
-    def ortModel = new File(aarCache, "ort/${modelKey}.ort")
-    // Generate the config (and Runtime .ort) on a config miss, or when we intend to
-    // publish but the .ort isn't present yet. The convert step is fast.
-    def ortGenerated = false
-    if (!opConfig.exists() || (!onnx.ortUploadUrl.isEmpty() && !ortModel.exists())) {
-        generateOpConfig(modelFile, opConfig, ortModel)
-        ortGenerated = true
+    // 1. CONSUMER fast-path: obtain the op-config without Python. The AAR cache hash
+    //    derives from this config, so having it (locally or via configUrl) is enough to
+    //    compute the hash and pull the prebuilt AAR — no Python, no NDK, no model download.
+    def configReady = opConfig.exists() && opConfig.length() > 0
+    if (!configReady && tryDownloadConfig(onnx.configUrl, opConfig)) {
+        configReady = true
+        logger.lifecycle("[onnx-reduce] op-config downloaded from remote (no Python needed)")
     }
-    // Publish the freshly (re)generated .ort once (best-effort, only with a target
-    // set). Steady-state builds (nothing regenerated) skip the 122 MB upload.
-    if (ortGenerated && !onnx.ortUploadUrl.isEmpty() && ortModel.exists()) uploadOrtModel(ortModel)
+
+    // 2. GENERATOR path: no config anywhere → download the model and generate the config
+    //    (+ the Runtime .ort) via Python. Only the first builder / publisher pays this.
+    def generated = false
+    if (!configReady) {
+        def modelFile = resolveModelFile(onnx.model)
+        generateOpConfig(modelFile, opConfig, ortModel)
+        generated = true
+    }
+
+    // 3. Publish freshly generated artifacts so consumers hit step 1 / the AAR cache.
+    //    Best-effort, gated by the upload targets; steady-state builds skip these.
+    if (generated) {
+        uploadFile(opConfig, onnx.configUploadUrl, 'op-config')
+        if (ortModel.exists()) uploadFile(ortModel, onnx.ortUploadUrl, 'model.ort')
+    }
 
     def hash = sha256([
         opConfigSignature(opConfig),
@@ -311,9 +349,9 @@ ext.onnx.resolveReducedAar = {
         logger.lifecycle("[onnx-reduce] remote AAR cache hit (${hash})")
         return destAar
     }
-    // c. build from source, then auto-upload to the remote cache so the next
-    //    consumer hits step b. If no upload target is set, or the upload fails
-    //    (no SSH access, unknown host, …), fall back to printing the manual path.
+    // c. build from source (needs only the op-config, not the model), then auto-upload
+    //    to the remote cache so the next consumer hits step b. If no upload target is
+    //    set, or the upload fails (no SSH access, unknown host, …), print the manual path.
     buildFromSource(opConfig, destAar)
     if (!onnx.cacheUploadUrl.isEmpty() && uploadReducedAar(hash, destAar)) {
         logger.lifecycle("[onnx-reduce] uploaded to remote cache (${hash}) — next build will hit it")

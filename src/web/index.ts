@@ -1,4 +1,4 @@
-import * as ort from "onnxruntime-web";
+import type { InferenceSession, Tensor } from "onnxruntime-web";
 import type {
   CapacitorOnnxPlugin,
   LoadModelInput,
@@ -16,7 +16,7 @@ import { applyRuntimeThreads, applyWebRuntimeConfig } from "./runtime-config";
 import { fromOrtTensor, toOrtTensor } from "./tensor";
 
 export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
-  private sessions = new Map<string, ort.InferenceSession>();
+  private sessions = new Map<string, InferenceSession>();
 
   private static modelKey(modelId: string, version: string): string {
     return `model-${modelId}-${version}`;
@@ -94,7 +94,7 @@ export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
       );
     }
 
-    const feeds: Record<string, ort.Tensor> = {};
+    const feeds: Record<string, Tensor> = {};
     for (const name of inputNames) {
       if (!session.inputNames.includes(name)) {
         throw new CapacitorOnnxError(
@@ -135,7 +135,7 @@ export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
   }
 
   private static async warmupSession(
-    session: ort.InferenceSession,
+    session: InferenceSession,
     warmupInputs: Record<string, RawTensor>,
   ): Promise<boolean> {
     const names = Object.keys(warmupInputs);
@@ -144,7 +144,7 @@ export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
     }
 
     try {
-      const feeds: Record<string, ort.Tensor> = {};
+      const feeds: Record<string, Tensor> = {};
       for (const name of names) {
         feeds[name] = toOrtTensor(warmupInputs[name]);
       }

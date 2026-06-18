@@ -61,7 +61,7 @@ Distributed via both **CocoaPods** (`CantooCapacitorOnnx.podspec` at the repo ro
 - Model integrity: download → temp file → SHA-256 check → atomic rename (Android and iOS). On Web, integrity is verified by creating and immediately releasing an `InferenceSession`.
 - `loadModel.status` is strict: `cache_hit` only when a valid cached artifact is reused; `downloaded` when a network fetch occurred.
 - Published as ESM-only (`type: module`). Consumers must use `import`.
-- `CapacitorOnnxWeb.setWebConfig({ cacheStorage, wasmPath })` must be called before `loadModel` in Web contexts to configure the WASM path and a custom cache backend.
+- Web runtime tuning (WASM path, threading) is configured per call via `loadModel`'s `sessionOptions.web` (`{ wasmPath?, multithread? }`); `applyWebRuntimeConfig`/`applyRuntimeThreads`/`applySingleThreadRuntime` in `runtime-config.ts` are applied inside `loadModel` before session creation.
 - iOS provider mapping: `cpu`→CPU, `nnapi`/`coreml`→CoreML, `auto`→CoreML with CPU fallback, web providers→CPU.
 
 ## Linter

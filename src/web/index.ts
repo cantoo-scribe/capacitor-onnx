@@ -7,7 +7,6 @@ import type {
   ReleaseModelInput,
   RunInput,
   RunResult,
-  WebConfig,
 } from "../definitions";
 import { CapacitorOnnxError } from "../errors";
 import { elapsedMs, nowMs } from "../helpers/time";
@@ -26,10 +25,6 @@ export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
     return `model-${modelId}-${version}`;
   }
 
-  static setWebConfig(config?: WebConfig): void {
-    applyWebRuntimeConfig(config?.wasmPath);
-  }
-
   async loadModel(_input: LoadModelInput): Promise<LoadModelResult> {
     if (_input.filePath !== undefined) {
       throw new CapacitorOnnxError(
@@ -43,6 +38,8 @@ export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
         "Expected exactly one of filePath or modelBuffer",
       );
     }
+
+    applyWebRuntimeConfig(_input.sessionOptions?.web?.wasmPath);
 
     if (_input.sessionOptions?.web?.multithread === false) {
       applySingleThreadRuntime();

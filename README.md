@@ -11,7 +11,7 @@ Capacitor plugin for ONNX Runtime inference on Android, iOS and Web.
 - `LoadModelInput` no longer accepts `url`, `sha256`, `forceRedownload`, or `timeoutMs`. Pass either `filePath` (iOS/Android) **or** `modelBuffer: Uint8Array` (web).
 - `LoadModelResult` no longer includes `status` (`cache_hit` / `downloaded`).
 - Methods `clearModel` and `clearAllCache` have been removed. `release(modelId, version)` still releases the in-memory ORT session.
-- `CapacitorOnnxWeb.setWebConfig` no longer accepts `cacheStorage` — only `wasmPath`.
+- `CapacitorOnnxWeb.setWebConfig` has been removed — configure `wasmPath` (and `multithread`) via `sessionOptions.web` on `loadModel` instead.
 - Error codes `NETWORK_ERROR`, `INTEGRITY_ERROR`, and `MODEL_INTEGRITY_ERROR` are no longer reachable.
 
 ### Migration example
@@ -95,13 +95,19 @@ Cross-Origin-Embedder-Policy: require-corp
 
 Plus, any cross-origin asset the page loads (model files, WASM artifacts, fonts, images) needs `Cross-Origin-Resource-Policy: cross-origin` (or `same-site`) on its response, otherwise it will be blocked under COEP. CDN/Storage hosting your `.onnx` artifacts must also send permissive **CORS** headers (`Access-Control-Allow-Origin`).
 
-For Web-only hosts (without Capacitor), import from the dedicated Web entrypoint and configure the WASM path before `loadModel`:
+The WASM path (and other web-only runtime tuning) is configured per `loadModel` call via `sessionOptions.web`:
 
 ```ts
-import { CapacitorOnnxWeb } from '@cantoo/capacitor-onnx/web';
-
-CapacitorOnnxWeb.setWebConfig({
-  wasmPath: '/ort-wasm/',
+await CapacitorOnnx.loadModel({
+  modelId: 'demo-model',
+  version: '1.0.0',
+  modelBuffer,
+  sessionOptions: {
+    web: {
+      wasmPath: '/ort-wasm/', // base path/URL for the ORT .wasm artifacts
+      multithread: false,     // optional: single-thread + SIMD instead of auto-threading
+    },
+  },
 });
 ```
 

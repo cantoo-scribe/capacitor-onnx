@@ -14,10 +14,6 @@ export interface PluginError {
   details?: Record<string, unknown>;
 }
 
-export interface WebConfig {
-  wasmPath?: string;
-}
-
 export interface LoadModelInput {
   modelId: string;
   version: string;
@@ -50,6 +46,12 @@ export interface WebSessionOptions {
    * with SIMD enabled (`ort.env.wasm.numThreads = 1`, `ort.env.wasm.simd = true`).
    */
   multithread?: boolean;
+  /**
+   * Base path/URL where the ONNX Runtime `.wasm` artifacts are served from.
+   * Applied to `ort.env.wasm.wasmPaths` before the session is created.
+   * Defaults to "" (resolved relative to the page).
+   */
+  wasmPath?: string;
 }
 
 export interface RunInput {

@@ -5,6 +5,15 @@ export function applyWebRuntimeConfig(wasmPath?: string): void {
   ort.env.wasm.wasmPaths = wasmPath || "";
 }
 
+/**
+ * Single-threaded mode with SIMD enabled. Use for models small enough that
+ * thread-pool overhead outweighs the parallelism gain.
+ */
+export function applySingleThreadRuntime(): void {
+  ort.env.wasm.simd = true;
+  ort.env.wasm.numThreads = 1;
+}
+
 export function applyRuntimeThreads(numThreads: number = 0): void {
   if (!numThreads) {
     const threadsAvailable =

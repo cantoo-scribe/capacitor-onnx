@@ -39,6 +39,17 @@ export interface SessionOptionsInput {
   executionProvider?: "cpu" | "nnapi" | "coreml" | "auto" | "wasm" | "webgpu" | "webnn";
   intraOpNumThreads?: number;
   interOpNumThreads?: number;
+  /** Web-only runtime tuning. Ignored on Android/iOS. */
+  web?: WebSessionOptions;
+}
+
+export interface WebSessionOptions {
+  /**
+   * When `true` (default), the WASM backend uses multiple threads
+   * (current auto-threading behavior). When `false`, runs single-threaded
+   * with SIMD enabled (`ort.env.wasm.numThreads = 1`, `ort.env.wasm.simd = true`).
+   */
+  multithread?: boolean;
 }
 
 export interface RunInput {

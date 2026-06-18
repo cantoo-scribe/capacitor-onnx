@@ -12,7 +12,11 @@ import type {
 import { CapacitorOnnxError } from "../errors";
 import { elapsedMs, nowMs } from "../helpers/time";
 import { createSessionWithFallback } from "./provider-resolver";
-import { applyRuntimeThreads, applyWebRuntimeConfig } from "./runtime-config";
+import {
+  applyRuntimeThreads,
+  applySingleThreadRuntime,
+  applyWebRuntimeConfig,
+} from "./runtime-config";
 import { fromOrtTensor, toOrtTensor } from "./tensor";
 
 export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
@@ -40,7 +44,11 @@ export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
       );
     }
 
-    applyRuntimeThreads(_input.sessionOptions?.intraOpNumThreads);
+    if (_input.sessionOptions?.web?.multithread === false) {
+      applySingleThreadRuntime();
+    } else {
+      applyRuntimeThreads(_input.sessionOptions?.intraOpNumThreads);
+    }
 
     const startTime = nowMs();
     const modelKey = CapacitorOnnxWeb.modelKey(_input.modelId, _input.version);

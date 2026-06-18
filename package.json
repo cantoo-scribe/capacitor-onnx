@@ -1,6 +1,6 @@
 {
   "name": "@cantoo/capacitor-onnx",
-  "version": "3.2.1",
+  "version": "3.2.2",
   "repository": "https://github.com/cantoo-scribe/capacitor-onnx.git",
   "homepage": "https://github.com/cantoo-scribe/capacitor-onnx#readme",
   "description": "Capacitor plugin for native ONNX Runtime inference on Android, iOS and Web",

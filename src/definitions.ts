@@ -47,6 +47,15 @@ export interface WebSessionOptions {
    */
   multithread?: boolean;
   /**
+   * When `true`, runs the WASM backend inside a proxy Web Worker
+   * (`ort.env.wasm.proxy = true`) so inference does not block the main
+   * thread. Input/output tensors are copied to/from the worker on every
+   * call, so prefer `false` (default) for small models with frequent calls.
+   * Requires the ORT worker artifacts to be loadable — set `wasmPath` if
+   * they are not served alongside the page.
+   */
+  proxy?: boolean;
+  /**
    * Base path/URL where the ONNX Runtime `.wasm` artifacts are served from.
    * Applied to `ort.env.wasm.wasmPaths` before the session is created.
    * Defaults to "" (resolved relative to the page).

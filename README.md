@@ -106,6 +106,7 @@ await CapacitorOnnx.loadModel({
     web: {
       wasmPath: '/ort-wasm/', // base path/URL for the ORT .wasm artifacts
       multithread: false,     // optional: single-thread + SIMD instead of auto-threading
+      proxy: true,            // optional: run inference in a Web Worker so the UI thread never blocks
     },
   },
 });

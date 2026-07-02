@@ -1,8 +1,9 @@
 import * as ort from "onnxruntime-web";
 
-export function applyWebRuntimeConfig(wasmPath?: string): void {
+export function applyWebRuntimeConfig(wasmPath?: string, proxy?: boolean): void {
   ort.env.logLevel = "error";
   ort.env.wasm.wasmPaths = wasmPath || "";
+  ort.env.wasm.proxy = proxy ?? false;
 }
 
 /**

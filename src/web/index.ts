@@ -39,7 +39,7 @@ export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
       );
     }
 
-    applyWebRuntimeConfig(_input.sessionOptions?.web?.wasmPath);
+    applyWebRuntimeConfig(_input.sessionOptions?.web?.wasmPath, _input.sessionOptions?.web?.proxy);
 
     if (_input.sessionOptions?.web?.multithread === false) {
       applySingleThreadRuntime();

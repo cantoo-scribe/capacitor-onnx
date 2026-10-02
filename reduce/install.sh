@@ -14,13 +14,14 @@
 # AAR (~9.4 MB compressed per arm64), whose .so embeds kernels for ~1500 operators.
 # A given model uses only a handful. This wires up a build that compiles a reduced
 # libonnxruntime.so containing ONLY your model's operators (arm64 ~9.4 MB → ~4 MB),
-# driven by YOUR model at build time. Opting out (not running this, or clearing
+# driven by YOUR model at build time (or models: list several, comma-separated, and the
+# runtime gets the union of their operators). Opting out (not running this, or clearing
 # onnxModel) keeps the full AAR — nothing breaks if you skip it. Android-only.
 #
 # What it does, interactively:
 #   1. preflight-checks the build toolchain (Python, NDK, cmake, ninja, …)
 #   2. optionally creates a Python venv with onnxruntime + onnx
-#   3. prompts for parameters (model URL/path, ORT version, ABIs, …)
+#   3. prompts for parameters (model URL(s)/path(s), ORT version, ABIs, …)
 #   4. copies android/onnx/{onnx-reduce.gradle,build-reduced-onnx.sh}
 #   5. writes a managed block to android/gradle.properties (your values)
 #   6. patches app/build.gradle to swap the full ORT AAR for the reduced one
@@ -348,12 +349,16 @@ ANDROID_DIR="${ANDROID_DIR%/}"
 [[ -d "$ANDROID_DIR" ]] || { echo "error: '$ANDROID_DIR' not found" >&2; exit 1; }
 REPO_ROOT="$(cd "$ANDROID_DIR/.." && pwd)"
 
-# Model reference (required; loop until non-empty). URL or local path to the .onnx.
+# Model reference(s) (required; loop until non-empty). URL or local path to the .onnx;
+# several models comma-separated (the runtime gets the union of their operators).
 MODEL_URL=""
 while [[ -z "$MODEL_URL" ]]; do
-  ask MODEL_URL "Model URL or local path (.onnx; downloaded/used on first build; e.g. https://host/model.onnx)" ""
+  ask MODEL_URL "Model URL(s) or local path(s) (.onnx, comma-separated for several models; downloaded/used on first build; e.g. https://host/model.onnx)" ""
   [[ -z "$MODEL_URL" ]] && warn "the model URL or path is required."
 done
+# Number of comma-separated, non-empty entries of a list.
+count_list() { tr ',' '\n' <<<"$1" | grep -c '[^[:space:]]' || true; }
+MODEL_COUNT="$(count_list "$MODEL_URL")"
 
 ask ORT_VERSION "ONNX Runtime version (matches @cantoo/capacitor-onnx's onnxruntime-android)" "$ORT_DEFAULT"
 ask ABIS "Target ABIs (comma-separated)" "arm64-v8a,armeabi-v7a"
@@ -363,7 +368,12 @@ maybe_make_venv
 ask PYTHON_INTERP "Python interpreter (with onnxruntime + onnx)" "${PYTHON_DEFAULT:-python3}"
 ask CACHE_URL "Remote AAR cache base URL (optional, read-only GET by hash)" ""
 ask CACHE_UPLOAD_URL "Remote AAR UPLOAD target (rsync/ssh, optional; e.g. user@host:/path/android)" ""
-ask ORT_UPLOAD_URL "Remote .ort model UPLOAD target (rsync/ssh file, optional; empty = don't publish)" ""
+ORT_UPLOAD_URL=""
+while true; do
+  ask ORT_UPLOAD_URL "Remote .ort model UPLOAD target (rsync/ssh file, optional; one per model, comma-separated, same order; empty = don't publish)" ""
+  [[ -z "$ORT_UPLOAD_URL" || "$(count_list "$ORT_UPLOAD_URL")" == "$MODEL_COUNT" ]] && break
+  warn "give one .ort target per model ($MODEL_COUNT), in the same order, or leave it empty."
+done
 ask CONFIG_URL "Remote op-config GET URL (optional; lets consumers skip Python on cache hit)" ""
 ask CONFIG_UPLOAD_URL "Remote op-config UPLOAD target (rsync/ssh file, optional; empty = don't publish)" ""
 

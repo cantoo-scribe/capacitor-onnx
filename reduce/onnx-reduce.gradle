@@ -6,6 +6,10 @@
 // model, and exposes its path so the app can link it in place of the full
 // Maven artifact (com.microsoft.onnxruntime:onnxruntime-android).
 //
+// An app that runs SEVERAL models lists them all, comma-separated: the runtime then
+// gets the UNION of their operators (one .so for every model), and each model still
+// gets its own .ort.
+//
 // Rationale: @cantoo/capacitor-onnx is shared across consumers (each with a
 // different model — e.g. a partner uses an int64 + attention_mask model). A
 // fixed reduced .so in the plugin would break them. Driving the reduction from
@@ -30,7 +34,13 @@ def prop = { String name, String fallback = '' ->
     project.hasProperty(name) ? project.property(name).toString().trim() : fallback
 }
 
-ext.onnx.model      = prop('onnxModel')                 // path|url, empty = opt-out
+// Comma-separated list (one value per entry, whitespace ignored).
+def listProp = { String name ->
+    prop(name).split(',').collect { it.trim() }.findAll { !it.isEmpty() }
+}
+
+ext.onnx.model      = prop('onnxModel')                 // path|url[,path|url…], empty = opt-out
+ext.onnx.models     = listProp('onnxModel')
 // NNAPI is ALWAYS compiled in (no opt-out). build-reduced-onnx.sh grafts our
 // reduced .so into the official AAR, whose libonnxruntime4j_jni.so has a hard
 // reference to OrtSessionOptionsAppendExecutionProvider_Nnapi. A CPU-only .so
@@ -45,8 +55,9 @@ ext.onnx.cacheUrl   = prop('onnxCacheUrl')              // read-only AAR store (
 ext.onnx.cacheUploadUrl = prop('onnxCacheUploadUrl')
 // rsync/ssh target for the model.ort FILE (the Runtime-style ORT model the app
 // loads). Empty = don't publish (keep it only locally). Separate from
-// cacheUploadUrl, which is the per-hash AAR cache dir.
-ext.onnx.ortUploadUrl = prop('onnxOrtUploadUrl')
+// cacheUploadUrl, which is the per-hash AAR cache dir. With several models: one
+// target per model, comma-separated, in the order of onnxModel.
+ext.onnx.ortUploadUrls = listProp('onnxOrtUploadUrl')
 // read-only GET URL for the reduced-build operator config (a small text file,
 // sibling of the .ort). When set, a CONSUMER downloads it instead of regenerating
 // it via Python — the op-config is what the AAR cache hash derives from, so having
@@ -57,7 +68,7 @@ ext.onnx.configUrl  = prop('onnxConfigUrl')
 // Empty = don't publish. A GENERATOR (has Python + creds) publishes it so consumers hit configUrl.
 ext.onnx.configUploadUrl = prop('onnxConfigUploadUrl')
 ext.onnx.python     = prop('onnxPython', 'python3')     // interpreter with onnxruntime (e.g. a .venv)
-ext.onnx.enabled    = !ext.onnx.model.isEmpty()
+ext.onnx.enabled    = !ext.onnx.models.isEmpty()
 
 // ABIs kept in sync with app/build.gradle's abiFilters.
 def ABIS = ['arm64-v8a', 'armeabi-v7a']
@@ -166,6 +177,24 @@ def generateOpConfig = { File modelFile, File outConfig, File outOrt ->
     outOrt.parentFile.mkdirs()
     runtimeOrt.renameTo(outOrt) || (outOrt.bytes = runtimeOrt.bytes)
     tmpDir.deleteDir()
+}
+
+// The op-config records which models it was generated for (a comment, so it stays out
+// of the AAR hash): a config made for another set of models — e.g. the remote one,
+// published before a model was added — would build a runtime that lacks the new
+// model's operators. Keyed by the sorted references, so the order of onnxModel does
+// not matter; for a single model it is sha256(model), the key used before lists.
+def modelSetKey = { List<String> models -> sha256(models.sort(false).join('\n')) }
+def MODELS_MARKER = '# onnx-reduce models: '
+
+def markConfig = { File cfg, String setKey ->
+    cfg.text = "${MODELS_MARKER}${setKey}\n" + cfg.text
+}
+
+// A config without the marker predates model lists: valid only for a single model.
+def configMatchesModels = { File cfg, String setKey, int modelCount ->
+    def marker = cfg.readLines().find { it.startsWith(MODELS_MARKER) }
+    marker == null ? modelCount == 1 : marker.substring(MODELS_MARKER.length()).trim() == setKey
 }
 
 // The config's comment header records the (temp) source path, which varies per
@@ -298,28 +327,47 @@ def buildFromSource = { File opConfig, File destAar ->
 ext.onnx.resolveReducedAar = {
     if (!onnx.enabled) return null
 
-    // Key the local op-config/.ort by the MODEL REFERENCE string (URL or path) — stable
+    def models = onnx.models
+    if (!onnx.ortUploadUrls.isEmpty() && onnx.ortUploadUrls.size() != models.size()) {
+        throw new GradleException("[onnx-reduce] onnxOrtUploadUrl lists ${onnx.ortUploadUrls.size()} " +
+            "target(s) for ${models.size()} model(s): give one per model, in the order of onnxModel")
+    }
+
+    // Key the local op-config/.ort by the MODEL REFERENCE strings (URLs or paths) — stable
     // across machines and, crucially, computable WITHOUT the model bytes, so a consumer
-    // can reuse a downloaded config and never fetch the ~122 MB model.
-    def refKey = sha256(onnx.model)
-    def opConfig = new File(aarCache, "configs/${refKey}.config")
-    def ortModel = new File(aarCache, "ort/${refKey}.ort")
+    // can reuse a downloaded config and never fetch the ~122 MB models.
+    def setKey = modelSetKey(models)
+    def opConfig = new File(aarCache, "configs/${setKey}.config")
+    def ortModelOf = { String model -> new File(aarCache, "ort/${sha256(model)}.ort") }
 
     // 1. CONSUMER fast-path: obtain the op-config without Python. The AAR cache hash
     //    derives from this config, so having it (locally or via configUrl) is enough to
     //    compute the hash and pull the prebuilt AAR — no Python, no NDK, no model download.
-    def configReady = opConfig.exists() && opConfig.length() > 0
+    def configReady = opConfig.exists() && opConfig.length() > 0 &&
+        configMatchesModels(opConfig, setKey, models.size())
     if (!configReady && tryDownloadConfig(onnx.configUrl, opConfig)) {
-        configReady = true
-        logger.lifecycle("[onnx-reduce] op-config downloaded from remote (no Python needed)")
+        if (configMatchesModels(opConfig, setKey, models.size())) {
+            configReady = true
+            logger.lifecycle("[onnx-reduce] op-config downloaded from remote (no Python needed)")
+        } else {
+            logger.lifecycle("[onnx-reduce] remote op-config was generated for other models — regenerating")
+            opConfig.delete()
+        }
     }
 
-    // 2. GENERATOR path: no config anywhere → download the model and generate the config
-    //    (+ the Runtime .ort) via Python. Only the first builder / publisher pays this.
+    // 2. GENERATOR path: no config anywhere → download each model and generate its config
+    //    (+ its Runtime .ort) via Python, then merge the configs into their union. Only
+    //    the first builder / publisher pays this.
     def generated = false
     if (!configReady) {
-        def modelFile = resolveModelFile(onnx.model)
-        generateOpConfig(modelFile, opConfig, ortModel)
+        def modelConfigs = models.collect { model ->
+            def modelConfig = new File(aarCache, "configs/models/${sha256(model)}.config")
+            logger.lifecycle("[onnx-reduce] model ${model}")
+            generateOpConfig(resolveModelFile(model), modelConfig, ortModelOf(model))
+            modelConfig
+        }
+        mergeConfigs(modelConfigs, opConfig)
+        markConfig(opConfig, setKey)
         generated = true
     }
 
@@ -327,7 +375,11 @@ ext.onnx.resolveReducedAar = {
     //    Best-effort, gated by the upload targets; steady-state builds skip these.
     if (generated) {
         uploadFile(opConfig, onnx.configUploadUrl, 'op-config')
-        if (ortModel.exists()) uploadFile(ortModel, onnx.ortUploadUrl, 'model.ort')
+        models.eachWithIndex { model, index ->
+            def ortModel = ortModelOf(model)
+            if (ortModel.exists() && index < onnx.ortUploadUrls.size())
+                uploadFile(ortModel, onnx.ortUploadUrls[index], "model.ort (${model})")
+        }
     }
 
     def hash = sha256([
@@ -365,7 +417,7 @@ ext.onnx.resolveReducedAar = {
 }
 
 if (onnx.enabled) {
-    logger.lifecycle("[onnx-reduce] ENABLED — model=${onnx.model} ort=${onnx.ortVersion} (nnapi always on)")
+    logger.lifecycle("[onnx-reduce] ENABLED — model(s)=${onnx.models.join(', ')} ort=${onnx.ortVersion} (nnapi always on)")
 } else {
     logger.lifecycle("[onnx-reduce] disabled (opt-out) — using full Maven onnxruntime-android")
 }

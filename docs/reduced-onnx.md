@@ -61,8 +61,9 @@ without installing: `pnpm dlx --package @cantoo/capacitor-onnx cantoo-onnx-reduc
 It is interactive and prompts for:
 
 - **Android project directory** (autodetects `./android`).
-- **Model URL or local path** (`.onnx`) — the build input. A URL is downloaded+cached;
-  a local path is used directly (absolute is safest).
+- **Model URL(s) or local path(s)** (`.onnx`) — the build input. A URL is downloaded+cached;
+  a local path is used directly (absolute is safest). Several models: comma-separated
+  (see [Several models](#several-models)).
 - **ORT version** (defaults to the plugin's).
 - **Target ABIs** (default `arm64-v8a,armeabi-v7a`).
 - **Python interpreter** (offers to create a `.venv`).
@@ -84,11 +85,11 @@ It is interactive and prompts for:
 
 | Key | Meaning |
 | --- | --- |
-| `onnxModel` | `.onnx` URL or local path (the build input). Empty = opt-out (full AAR). |
+| `onnxModel` | `.onnx` URL or local path (the build input); several, comma-separated. Empty = opt-out (full AAR). |
 | `onnxOrtVersion` | ORT version to build/convert with (must match the plugin's dep). |
 | `onnxCacheUrl` | Read-only remote AAR cache (GET by content hash). Empty = disabled. |
 | `onnxCacheUploadUrl` | rsync/ssh target to publish the built AAR to the cache. Empty = no publish. |
-| `onnxOrtUploadUrl` | rsync/ssh **file** target to publish the `.ort` model. Empty = no publish. |
+| `onnxOrtUploadUrl` | rsync/ssh **file** target to publish the `.ort` model; with several models, one per model, comma-separated, in the order of `onnxModel`. Empty = no publish. |
 | `onnxConfigUrl` | Read-only GET URL for the op-config. Set it so **consumers skip Python** on a cache hit (see below). Empty = always regenerate locally. |
 | `onnxConfigUploadUrl` | rsync/ssh **file** target to publish the op-config (the generator publishes it for consumers). Empty = no publish. |
 | `onnxPython` | Python interpreter with `onnxruntime`+`onnx` (e.g. a `.venv`). Only the **generator** needs it. |
@@ -123,6 +124,33 @@ key everything hinges on. At Gradle configuration time `resolveReducedAar()`:
 NNAPI is always compiled into the `.so` (the official JNI glue requires the
 `OrtSessionOptionsAppendExecutionProvider_Nnapi` symbol); it is only *used* if a session
 opts in. All caches live under `android/.cache/` (git-ignored, survives `gradlew clean`).
+
+## Several models
+
+An app that runs more than one model (e.g. one per language) lists them all in
+`onnxModel`, comma-separated:
+
+```properties
+onnxModel=https://host/models/fr/model.onnx,https://host/models/pt/model.onnx
+onnxOrtUploadUrl=user@host:/srv/models/fr/model.ort,user@host:/srv/models/pt/model.ort
+```
+
+- The op-config is the **union** of the models' operators, so the single reduced `.so`
+  runs every model. Adding a model changes the op-config, hence the AAR hash: the first
+  build after it is a cache miss (a generator run).
+- Each model still gets its **own `.ort`**, published to the `onnxOrtUploadUrl` entry at
+  the same position. Leave `onnxOrtUploadUrl` empty to keep them local.
+- The op-config records the set of models it was generated for (a `# onnx-reduce models:`
+  comment, kept out of the AAR hash). A config downloaded from `onnxConfigUrl` for
+  another set — typically the one published before a model was added — is **rejected and
+  regenerated**, instead of silently building a runtime that lacks the new model's
+  operators. A config without that line (published before lists were supported) is only
+  accepted for a single model.
+- The order of `onnxModel` does not matter for the op-config and the AAR; it only pairs
+  each model with its `.ort` upload target.
+- Since the op-config and the AAR now serve every model, point `onnxConfigUrl` /
+  `onnxCacheUrl` (and their upload targets) at a location that is not specific to one
+  model.
 
 ## App-side wiring (consumer responsibility)
 

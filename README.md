@@ -210,7 +210,8 @@ or setup** — just `loadModel`. This is the default; if you do nothing, you get
 
 For Android you can shrink the native runtime by compiling a `libonnxruntime.so` with
 **only your model's operators** (~57–59% smaller on arm64) and loading a pre-optimized
-**`.ort`** model instead of the `.onnx`. It is **opt-in and Android-only**; iOS/Web keep
+**`.ort`** model instead of the `.onnx`. An app with several models lists them all and gets
+one runtime with the union of their operators. It is **opt-in and Android-only**; iOS/Web keep
 the default path.
 
 ```bash

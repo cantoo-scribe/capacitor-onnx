@@ -126,8 +126,8 @@ The package exports:
 
 | Method | Signature | Purpose | Notes |
 | --- | --- | --- | --- |
-| `loadModel` | `(input: LoadModelInput) => Promise<LoadModelResult>` | Creates an ONNX Runtime session from the model bytes (web) or file path (native), and optionally warms it up. Must be called once per `modelId+version` before `run`. | Native: pass `filePath` (absolute path or `file://` URI). Web: pass `modelBuffer: Uint8Array`. Pass `warmupInputs` (a `Record<string, RawTensor>` keyed by model input name) to pay first-inference cost upfront, and `sessionOptions` to pick the execution provider / thread counts. The result includes `executionProviderUsed`. |
-| `run` | `(input: RunInput) => Promise<RunResult>` | Runs inference on a previously loaded session. | Pass `inputs` as a `Record<string, RawTensor>` keyed by the model's ONNX input names. Calls to the same `modelId+version` are serialized by a per-session lock; different models run in parallel. Returns `{ outputs, latencyMs }`, where `outputs` is keyed by the model's output names. Pre/post-processing is the consumer's responsibility. |
+| `loadModel` | `(input: LoadModelInput) => Promise<LoadModelResult>` | Creates an ONNX Runtime session from the model bytes (web) or file path (native), and optionally warms it up. Must be called once per `modelId+version` before `run`. | Native: pass `filePath` (absolute path or `file://` URI). Web: pass `modelBuffer: Uint8Array`. Pass `warmupInputs` (a `Record<string, InputTensor>` keyed by model input name) to pay first-inference cost upfront, and `sessionOptions` to pick the execution provider / thread counts. The result includes `executionProviderUsed`. |
+| `run` | `(input: RunInput) => Promise<RunResult>` | Runs inference on a previously loaded session. | Pass `inputs` as a `Record<string, InputTensor>` keyed by the model's ONNX input names (`data` as a `number[]` or a typed array, see [Typed arrays](#typed-arrays)); `typedOutputs: true` returns typed-array outputs. Calls to the same `modelId+version` are serialized by a per-session lock; different models run in parallel. Returns `{ outputs, latencyMs }`, where `outputs` is keyed by the model's output names. Pre/post-processing is the consumer's responsibility. |
 | `release` | `(input: ReleaseModelInput) => Promise<void>` | Releases the in-memory ONNX session for the given `modelId+version`. | Use to free RAM/GPU memory when you are done with a model. The host app is responsible for managing model files on disk. |
 
 Type definitions for every input/result (e.g. `LoadModelInput`, `RawTensor`, `SessionOptionsInput`, `PluginError`) live in [src/definitions.ts](src/definitions.ts).
@@ -184,9 +184,26 @@ console.log(logits.dims, logits.data.length);
 await CapacitorOnnx.release({ modelId: 'demo-model', version: '1.0.0' });
 ```
 
+## Typed arrays
+
+An input's `data` can be a typed array instead of a `number[]`: `Float32Array` (float32), `Int32Array` (int32), `BigInt64Array` (int64), `Uint8Array` (uint8, bool), `Uint32Array` (uint32), `Uint16Array` (float16 bits). With `typedOutputs: true`, `run` returns each output's `data` as the typed array of its type (`TypedRunResult`).
+
+On Android/iOS this is much cheaper for large tensors: the Capacitor bridge only carries JSON, so a `number[]` crosses it as text, while a typed array crosses it as the base64 of its bytes and is decoded straight into the tensor (outputs the same way back). Measured on an Android emulator with a 15 s fbank input (1500 × 80 floats): 16.9 s per `run` with `number[]` in and out, 2.0 s with typed arrays. On web, it saves the conversions to and from `number[]`.
+
+A typed array passed as input is copied, never kept or detached (the ORT proxy worker transfers input buffers). `number[]` inputs and outputs keep working as before.
+
+```ts
+const { outputs } = await CapacitorOnnx.run({
+  modelId, version,
+  inputs: { input_values: { type: 'float32', dims: [1, samples.length], data: samples } }, // Float32Array
+  typedOutputs: true,
+});
+const logits = outputs.logits.data as Float32Array;
+```
+
 ## Runtime Notes
 
-- `loadModel` supports optional `warmupInputs: Record<string, RawTensor>` to pre-run the session with sample tensors keyed by model input name (e.g. `{ input_values: { type: 'float32', dims: [1, 16000], data: [...] } }`). Warmup is skipped when `warmupInputs` is omitted.
+- `loadModel` supports optional `warmupInputs: Record<string, InputTensor>` to pre-run the session with sample tensors keyed by model input name (e.g. `{ input_values: { type: 'float32', dims: [1, 16000], data: [...] } }`). Warmup is skipped when `warmupInputs` is omitted.
 - `loadModel` returns `executionProviderUsed` with the provider that was actually initialized.
 - Web provider selection supports `sessionOptions.executionProvider` with `auto`, `wasm`, `webgpu`, `webnn` plus native aliases (`cpu`/`nnapi`/`coreml` mapped to `wasm` in Web).
 - In Web `auto` mode, provider resolution tries accelerated providers first (`webgpu`, `webnn`) and falls back to `wasm`.

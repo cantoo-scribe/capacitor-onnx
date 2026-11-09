@@ -7,6 +7,7 @@ import type {
   ReleaseModelInput,
   RunInput,
   RunResult,
+  TypedRunResult,
 } from "../definitions";
 import { CapacitorOnnxWeb } from "./index";
 
@@ -17,7 +18,9 @@ export class WrapperCapacitorOnnxWeb extends WebPlugin implements CapacitorOnnxP
     return await this.engine.loadModel(input);
   }
 
-  async run(input: RunInput): Promise<RunResult> {
+  async run(input: RunInput & { typedOutputs: true }): Promise<TypedRunResult>;
+  async run(input: RunInput): Promise<RunResult>;
+  async run(input: RunInput): Promise<RunResult | TypedRunResult> {
     return await this.engine.run(input);
   }
 

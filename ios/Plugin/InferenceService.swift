@@ -39,10 +39,28 @@ enum OnnxPluginError: Error {
     }
 }
 
+/// A tensor as it crosses the JS bridge: its elements either as JSON numbers (`data`) or as
+/// their little-endian bytes (`bytes`, carried as base64), exactly one of the two.
 struct RawTensorInternal {
-    let data: [Double]
     let dims: [Int64]
     let type: String
+    var data: [Double]? = nil
+    var bytes: Data? = nil
+
+    var elementCount: Int {
+        if let data = data { return data.count }
+        return (bytes?.count ?? 0) / RawTensorInternal.elementByteSize(type)
+    }
+
+    /// Bytes per element of a tensor type, as the JS side lays them out (TypedTensorData).
+    static func elementByteSize(_ type: String) -> Int {
+        switch type {
+        case "int64": return 8
+        case "float16": return 2
+        case "uint8", "bool": return 1
+        default: return 4
+        }
+    }
 }
 
 class InferenceService {
@@ -89,7 +107,8 @@ class InferenceService {
     func run(
         modelId: String,
         version: String,
-        inputs: [String: RawTensorInternal]
+        inputs: [String: RawTensorInternal],
+        typedOutputs: Bool = false
     ) throws -> [String: RawTensorInternal] {
         guard !inputs.isEmpty else {
             throw OnnxPluginError.inferenceError("run() requires at least one input tensor")
@@ -127,7 +146,7 @@ class InferenceService {
         var result: [String: RawTensorInternal] = [:]
         for name in outputNames {
             guard let value = runOutputs[name] else { continue }
-            result[name] = try readOrtValue(value)
+            result[name] = try readOrtValue(value, asBytes: typedOutputs)
         }
         guard !result.isEmpty else {
             throw OnnxPluginError.modelInvalid("model produced no output")
@@ -136,7 +155,7 @@ class InferenceService {
     }
 
     private func validateTensor(name: String, raw: RawTensorInternal) throws {
-        guard !raw.data.isEmpty else {
+        guard raw.elementCount > 0 else {
             throw OnnxPluginError.inferenceError("input '\(name)' data is empty")
         }
         guard !raw.dims.isEmpty else {
@@ -146,31 +165,37 @@ class InferenceService {
             throw OnnxPluginError.inferenceError("input '\(name)' dims must have positive dimensions")
         }
         let elementCount = raw.dims.reduce(1, *)
-        guard elementCount == Int64(raw.data.count) else {
+        guard elementCount == Int64(raw.elementCount) else {
             throw OnnxPluginError.inferenceError("input '\(name)' data size does not match dims")
         }
     }
 
     private func buildOrtValue(name: String, raw: RawTensorInternal) throws -> ORTValue {
         let shape = raw.dims.map { NSNumber(value: $0) }
+        if let bytes = raw.bytes {
+            return try buildOrtValue(name: name, type: raw.type, bytes: bytes, shape: shape)
+        }
+        guard let rawData = raw.data else {
+            throw OnnxPluginError.inferenceError("input '\(name)' has no data")
+        }
         let data = NSMutableData()
         let elementType: ORTTensorElementDataType
 
         switch raw.type {
         case "float32":
-            var values = raw.data.map { Float($0) }
+            var values = rawData.map { Float($0) }
             data.append(&values, length: values.count * MemoryLayout<Float>.stride)
             elementType = .float
         case "int32":
-            var values = raw.data.map { Int32($0) }
+            var values = rawData.map { Int32($0) }
             data.append(&values, length: values.count * MemoryLayout<Int32>.stride)
             elementType = .int32
         case "int64":
-            var values = raw.data.map { Int64($0) }
+            var values = rawData.map { Int64($0) }
             data.append(&values, length: values.count * MemoryLayout<Int64>.stride)
             elementType = .int64
         case "uint8":
-            var values = raw.data.map { UInt8($0) }
+            var values = rawData.map { UInt8($0) }
             data.append(&values, length: values.count * MemoryLayout<UInt8>.stride)
             elementType = .uInt8
         default:
@@ -185,10 +210,51 @@ class InferenceService {
         return try ORTValue(tensorData: data, elementType: elementType, shape: shape)
     }
 
-    private func readOrtValue(_ value: ORTValue) throws -> RawTensorInternal {
+    // The bytes come from the JS typed arrays, little-endian like every iOS device.
+    private func buildOrtValue(
+        name: String,
+        type: String,
+        bytes: Data,
+        shape: [NSNumber]
+    ) throws -> ORTValue {
+        let elementType: ORTTensorElementDataType
+        switch type {
+        case "float32": elementType = .float
+        case "int32": elementType = .int32
+        case "int64": elementType = .int64
+        case "uint8": elementType = .uInt8
+        default:
+            // As with JSON data: no bool, float16 or uint32 tensors on iOS.
+            throw OnnxPluginError.inferenceError(
+                "unsupported tensor type '\(type)' for input '\(name)'"
+            )
+        }
+        return try ORTValue(
+            tensorData: NSMutableData(data: bytes),
+            elementType: elementType,
+            shape: shape
+        )
+    }
+
+    private func readOrtValue(_ value: ORTValue, asBytes: Bool) throws -> RawTensorInternal {
         let info = try value.tensorTypeAndShapeInfo()
         let dims = info.shape.map { $0.int64Value }
         let raw = try value.tensorData() as Data
+
+        if asBytes {
+            let type: String
+            switch info.elementType {
+            case .float: type = "float32"
+            case .int32: type = "int32"
+            case .int64: type = "int64"
+            case .uInt8: type = "uint8"
+            default:
+                throw OnnxPluginError.inferenceError("unsupported output tensor type")
+            }
+            // A copy of the bytes: the ORTValue's memory goes away with it.
+            let bytes = raw.withUnsafeBytes { Data($0) }
+            return RawTensorInternal(dims: dims, type: type, bytes: bytes)
+        }
 
         let data: [Double]
         let type: String
@@ -209,7 +275,7 @@ class InferenceService {
             throw OnnxPluginError.inferenceError("unsupported output tensor type")
         }
 
-        return RawTensorInternal(data: data, dims: dims, type: type)
+        return RawTensorInternal(dims: dims, type: type, data: data)
     }
 
     private func sessionLock(for modelId: String, version: String) -> NSLock {

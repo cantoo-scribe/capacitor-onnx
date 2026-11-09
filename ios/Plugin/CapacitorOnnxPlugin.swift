@@ -121,12 +121,14 @@ public class CapacitorOnnxPlugin: CAPPlugin {
             rejectStructured(call, code: "INFERENCE_ERROR", message: "Invalid inputs: each entry must include numeric data and positive dims")
             return
         }
+        let typedOutputs = call.getBool("typedOutputs") ?? false
 
         Task {
             do {
                 let startMs = currentTimeMs()
                 let result = try inferenceService.run(
-                    modelId: modelId, version: version, inputs: inputs
+                    modelId: modelId, version: version, inputs: inputs,
+                    typedOutputs: typedOutputs
                 )
                 var outputs: [String: Any] = [:]
                 for (name, tensor) in result {
@@ -197,28 +199,42 @@ public class CapacitorOnnxPlugin: CAPPlugin {
         return result
     }
 
+    // A tensor's elements come as JSON numbers (`data`) or as the base64 of a JS typed
+    // array's bytes (`dataBase64`, see the JS NativeTensor).
     private static func parseTensor(_ json: [String: Any]) -> RawTensorInternal? {
         guard let type = json["type"] as? String, !type.isEmpty else { return nil }
-        guard let dataRaw = json["data"] as? [Any],
-              let dimsRaw = json["dims"] as? [Any] else { return nil }
-
-        let data = dataRaw.compactMap { ($0 as? NSNumber)?.doubleValue }
-        guard data.count == dataRaw.count else { return nil }
+        guard let dimsRaw = json["dims"] as? [Any] else { return nil }
 
         let dims = dimsRaw.compactMap { ($0 as? NSNumber)?.int64Value }
         guard dims.count == dimsRaw.count, !dims.isEmpty, dims.allSatisfy({ $0 > 0 }) else { return nil }
 
         let elementCount = dims.reduce(1, *)
+
+        if let dataBase64 = json["dataBase64"] as? String {
+            guard let bytes = Data(base64Encoded: dataBase64),
+                  Int64(bytes.count) == elementCount * Int64(RawTensorInternal.elementByteSize(type))
+            else { return nil }
+            return RawTensorInternal(dims: dims, type: type, bytes: bytes)
+        }
+
+        guard let dataRaw = json["data"] as? [Any] else { return nil }
+        let data = dataRaw.compactMap { ($0 as? NSNumber)?.doubleValue }
+        guard data.count == dataRaw.count else { return nil }
         guard elementCount == Int64(data.count) else { return nil }
 
-        return RawTensorInternal(data: data, dims: dims, type: type)
+        return RawTensorInternal(dims: dims, type: type, data: data)
     }
 
     private static func tensorToDict(_ tensor: RawTensorInternal) -> [String: Any] {
-        return [
-            "data": tensor.data,
+        var dict: [String: Any] = [
             "dims": tensor.dims.map { NSNumber(value: $0) },
             "type": tensor.type,
         ]
+        if let bytes = tensor.bytes {
+            dict["dataBase64"] = bytes.base64EncodedString()
+        } else {
+            dict["data"] = tensor.data ?? []
+        }
+        return dict
     }
 }

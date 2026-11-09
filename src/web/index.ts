@@ -1,12 +1,15 @@
 import type { InferenceSession, Tensor } from "onnxruntime-web";
 import type {
   CapacitorOnnxPlugin,
+  InputTensor,
   LoadModelInput,
   LoadModelResult,
   RawTensor,
   ReleaseModelInput,
   RunInput,
   RunResult,
+  TypedRawTensor,
+  TypedRunResult,
 } from "../definitions";
 import { CapacitorOnnxError } from "../errors";
 import { elapsedMs, nowMs } from "../helpers/time";
@@ -16,7 +19,7 @@ import {
   applySingleThreadRuntime,
   applyWebRuntimeConfig,
 } from "./runtime-config";
-import { fromOrtTensor, toOrtTensor } from "./tensor";
+import { fromOrtTensor, fromOrtTensorTyped, toOrtTensor } from "./tensor";
 
 export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
   private sessions = new Map<string, InferenceSession>();
@@ -79,7 +82,9 @@ export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
     };
   }
 
-  async run(_input: RunInput): Promise<RunResult> {
+  async run(input: RunInput & { typedOutputs: true }): Promise<TypedRunResult>;
+  async run(input: RunInput): Promise<RunResult>;
+  async run(_input: RunInput): Promise<RunResult | TypedRunResult> {
     const startTime = nowMs();
     const modelKey = CapacitorOnnxWeb.modelKey(_input.modelId, _input.version);
     const session = this.sessions.get(modelKey);
@@ -112,11 +117,12 @@ export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
 
     const inferenceResult = await session.run(feeds);
 
-    const outputs: Record<string, RawTensor> = {};
+    const toOutput = _input.typedOutputs ? fromOrtTensorTyped : fromOrtTensor;
+    const outputs: Record<string, RawTensor | TypedRawTensor> = {};
     for (const name of session.outputNames) {
       const tensor = inferenceResult[name];
       if (tensor) {
-        outputs[name] = fromOrtTensor(tensor);
+        outputs[name] = toOutput(tensor);
       }
     }
 
@@ -127,7 +133,7 @@ export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
     return {
       outputs,
       latencyMs: elapsedMs(startTime),
-    };
+    } as RunResult | TypedRunResult;
   }
 
   async release(_input: ReleaseModelInput): Promise<void> {
@@ -141,7 +147,7 @@ export class CapacitorOnnxWeb implements CapacitorOnnxPlugin {
 
   private static async warmupSession(
     session: InferenceSession,
-    warmupInputs: Record<string, RawTensor>,
+    warmupInputs: Record<string, InputTensor>,
   ): Promise<boolean> {
     const names = Object.keys(warmupInputs);
     if (names.length === 0) {

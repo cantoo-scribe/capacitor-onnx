@@ -1,6 +1,7 @@
 package com.cantoo.capacitor.onnx
 
 import android.net.Uri
+import android.util.Base64
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -156,32 +157,49 @@ class CapacitorOnnxPlugin : Plugin() {
         return result
     }
 
+    // A tensor's elements come as JSON numbers (`data`) or as the base64 of a JS typed
+    // array's bytes (`dataBase64`, see the JS NativeTensor).
     private fun parseTensor(json: JSONObject): RawTensorInternal? {
         val type = json.optString("type", "")
         if (type.isBlank()) return null
-        val dataJson = json.optJSONArray("data") ?: return null
         val dimsJson = json.optJSONArray("dims") ?: return null
-
-        val data = DoubleArray(dataJson.length()) { i -> dataJson.optDouble(i, Double.NaN) }
-        if (data.any { it.isNaN() }) return null
 
         val dims = LongArray(dimsJson.length()) { i -> dimsJson.optLong(i, -1L) }
         if (dims.isEmpty() || dims.any { it <= 0L }) return null
 
         var elementCount = 1L
         for (d in dims) elementCount *= d
+
+        if (json.has("dataBase64")) {
+            val bytes = try {
+                Base64.decode(json.optString("dataBase64", ""), Base64.DEFAULT)
+            } catch (_: IllegalArgumentException) {
+                return null
+            }
+            if (bytes.size.toLong() != elementCount * elementByteSize(type)) return null
+            return RawTensorInternal(dims = dims, type = type, bytes = bytes)
+        }
+
+        val dataJson = json.optJSONArray("data") ?: return null
+        val data = DoubleArray(dataJson.length()) { i -> dataJson.optDouble(i, Double.NaN) }
+        if (data.any { it.isNaN() }) return null
         if (elementCount != data.size.toLong()) return null
 
-        return RawTensorInternal(data = data, dims = dims, type = type)
+        return RawTensorInternal(dims = dims, type = type, data = data)
     }
 
     private fun tensorToJson(tensor: RawTensorInternal): JSObject {
-        val dataArray = JSArray()
-        tensor.data.forEach { dataArray.put(it) }
         val dimsArray = JSArray()
         tensor.dims.forEach { dimsArray.put(it.toDouble()) }
         return JSObject().apply {
-            put("data", dataArray)
+            val bytes = tensor.bytes
+            if (bytes != null) {
+                put("dataBase64", Base64.encodeToString(bytes, Base64.NO_WRAP))
+            } else {
+                val dataArray = JSArray()
+                tensor.data?.forEach { dataArray.put(it) }
+                put("data", dataArray)
+            }
             put("dims", dimsArray)
             put("type", tensor.type)
         }
@@ -192,6 +210,7 @@ class CapacitorOnnxPlugin : Plugin() {
         val modelId = call.getString("modelId")
         val version = call.getString("version")
         val inputsJson = call.getObject("inputs")
+        val typedOutputs = call.getBoolean("typedOutputs", false) ?: false
 
         if (modelId == null || version == null || inputsJson == null) {
             rejectStructured(call, "INFERENCE_ERROR", "Missing required fields: modelId, version, inputs")
@@ -211,6 +230,7 @@ class CapacitorOnnxPlugin : Plugin() {
                     modelId = modelId,
                     version = version,
                     inputs = inputs,
+                    typedOutputs = typedOutputs,
                 )
 
                 val outputsJson = JSObject()

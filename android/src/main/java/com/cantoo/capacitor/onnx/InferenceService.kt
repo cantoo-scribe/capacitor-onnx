@@ -10,16 +10,33 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.nio.IntBuffer
 import java.nio.LongBuffer
 import java.util.concurrent.ConcurrentHashMap
 
+/**
+ * A tensor as it crosses the JS bridge: its elements either as JSON numbers (`data`) or as
+ * their little-endian bytes (`bytes`, carried as base64), exactly one of the two.
+ */
 data class RawTensorInternal(
-    val data: DoubleArray,
     val dims: LongArray,
     val type: String,
-)
+    val data: DoubleArray? = null,
+    val bytes: ByteArray? = null,
+) {
+    val elementCount: Int
+        get() = data?.size ?: ((bytes?.size ?: 0) / elementByteSize(type))
+}
+
+/** Bytes per element of a tensor type, as the JS side lays them out (TypedTensorData). */
+fun elementByteSize(type: String): Int = when (type) {
+    "int64" -> 8
+    "float16" -> 2
+    "uint8", "bool" -> 1
+    else -> 4
+}
 
 class InferenceService(
     private val sessionManager: SessionManager,
@@ -66,6 +83,7 @@ class InferenceService(
         modelId: String,
         version: String,
         inputs: Map<String, RawTensorInternal>,
+        typedOutputs: Boolean = false,
     ): Map<String, RawTensorInternal> = withContext(Dispatchers.Default) {
         val sessionRef = sessionManager.getSession(modelId, version)
             ?: throw IllegalStateException("SESSION_INIT_ERROR: model not loaded, call loadModel first")
@@ -92,7 +110,7 @@ class InferenceService(
                     val outputs = LinkedHashMap<String, RawTensorInternal>()
                     for (entry in result) {
                         val tensor = entry.value as? OnnxTensor ?: continue
-                        outputs[entry.key] = readOnnxTensor(tensor)
+                        outputs[entry.key] = readOnnxTensor(tensor, typedOutputs)
                     }
                     if (outputs.isEmpty()) {
                         throw IllegalStateException("MODEL_INVALID: model produced no outputs")
@@ -106,7 +124,7 @@ class InferenceService(
     }
 
     private fun validateTensor(name: String, raw: RawTensorInternal, info: NodeInfo) {
-        if (raw.data.isEmpty()) {
+        if (raw.elementCount == 0) {
             throw IllegalStateException("INFERENCE_ERROR: input '$name' data is empty")
         }
         if (raw.dims.isEmpty()) {
@@ -119,7 +137,7 @@ class InferenceService(
             }
             elementCount *= dim
         }
-        if (elementCount != raw.data.size.toLong()) {
+        if (elementCount != raw.elementCount.toLong()) {
             throw IllegalStateException("INFERENCE_ERROR: input '$name' data size does not match dims")
         }
         val tensorInfo = info.info as? TensorInfo
@@ -140,25 +158,29 @@ class InferenceService(
         name: String,
         raw: RawTensorInternal,
     ): OnnxTensor {
+        val bytes = raw.bytes
+        if (bytes != null) return buildOnnxTensorFromBytes(env, name, raw, bytes)
+        val data = raw.data
+            ?: throw IllegalStateException("INFERENCE_ERROR: input '$name' has no data")
         return when (raw.type) {
             "float32" -> {
-                val arr = FloatArray(raw.data.size) { raw.data[it].toFloat() }
+                val arr = FloatArray(data.size) { data[it].toFloat() }
                 OnnxTensor.createTensor(env, FloatBuffer.wrap(arr), raw.dims)
             }
             "int32" -> {
-                val arr = IntArray(raw.data.size) { raw.data[it].toInt() }
+                val arr = IntArray(data.size) { data[it].toInt() }
                 OnnxTensor.createTensor(env, IntBuffer.wrap(arr), raw.dims)
             }
             "int64" -> {
-                val arr = LongArray(raw.data.size) { raw.data[it].toLong() }
+                val arr = LongArray(data.size) { data[it].toLong() }
                 OnnxTensor.createTensor(env, LongBuffer.wrap(arr), raw.dims)
             }
             "uint8" -> {
-                val arr = ByteArray(raw.data.size) { raw.data[it].toInt().toByte() }
+                val arr = ByteArray(data.size) { data[it].toInt().toByte() }
                 OnnxTensor.createTensor(env, ByteBuffer.wrap(arr), raw.dims, OnnxJavaType.UINT8)
             }
             "bool" -> {
-                val arr = ByteArray(raw.data.size) { if (raw.data[it] != 0.0) 1 else 0 }
+                val arr = ByteArray(data.size) { if (data[it] != 0.0) 1 else 0 }
                 OnnxTensor.createTensor(env, ByteBuffer.wrap(arr), raw.dims, OnnxJavaType.BOOL)
             }
             else -> throw IllegalStateException(
@@ -167,7 +189,45 @@ class InferenceService(
         }
     }
 
-    private fun readOnnxTensor(tensor: OnnxTensor): RawTensorInternal {
+    // The bytes come from the JS typed arrays, little-endian (every target platform is).
+    private fun buildOnnxTensorFromBytes(
+        env: OrtEnvironment,
+        name: String,
+        raw: RawTensorInternal,
+        bytes: ByteArray,
+    ): OnnxTensor {
+        val count = raw.elementCount
+        val littleEndian = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        return when (raw.type) {
+            "float32" -> {
+                val arr = FloatArray(count)
+                littleEndian.asFloatBuffer().get(arr)
+                OnnxTensor.createTensor(env, FloatBuffer.wrap(arr), raw.dims)
+            }
+            "int32" -> {
+                val arr = IntArray(count)
+                littleEndian.asIntBuffer().get(arr)
+                OnnxTensor.createTensor(env, IntBuffer.wrap(arr), raw.dims)
+            }
+            "int64" -> {
+                val arr = LongArray(count)
+                littleEndian.asLongBuffer().get(arr)
+                OnnxTensor.createTensor(env, LongBuffer.wrap(arr), raw.dims)
+            }
+            "uint8" -> {
+                OnnxTensor.createTensor(env, ByteBuffer.wrap(bytes), raw.dims, OnnxJavaType.UINT8)
+            }
+            "bool" -> {
+                val arr = ByteArray(count) { if (bytes[it] != 0.toByte()) 1 else 0 }
+                OnnxTensor.createTensor(env, ByteBuffer.wrap(arr), raw.dims, OnnxJavaType.BOOL)
+            }
+            else -> throw IllegalStateException(
+                "INFERENCE_ERROR: unsupported tensor type '${raw.type}' for input '$name'",
+            )
+        }
+    }
+
+    private fun readOnnxTensor(tensor: OnnxTensor, asBytes: Boolean): RawTensorInternal {
         val info = tensor.info
         val type = when (info.type) {
             OnnxJavaType.FLOAT -> "float32"
@@ -178,6 +238,13 @@ class InferenceService(
             else -> throw IllegalStateException(
                 "INFERENCE_ERROR: unsupported output tensor type ${info.type}",
             )
+        }
+        if (asBytes) {
+            // A copy of the tensor's native (little-endian) bytes.
+            val buffer = tensor.byteBuffer
+            val bytes = ByteArray(buffer.remaining())
+            buffer.get(bytes)
+            return RawTensorInternal(dims = info.shape, type = type, bytes = bytes)
         }
         return RawTensorInternal(
             data = flattenToDoubleArray(tensor.value),

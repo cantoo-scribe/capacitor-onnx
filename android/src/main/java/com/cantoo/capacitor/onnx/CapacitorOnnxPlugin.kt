@@ -1,7 +1,6 @@
 package com.cantoo.capacitor.onnx
 
 import android.net.Uri
-import android.util.Log
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -190,9 +189,6 @@ class CapacitorOnnxPlugin : Plugin() {
 
     @PluginMethod
     fun run(call: PluginCall) {
-        // TEMPORARY diagnostic instrumentation — revert after debugging the Android freeze.
-        val cb = call.callbackId
-        Log.i("CapacitorOnnxDbg", "run() ENTER cb=$cb")
         val modelId = call.getString("modelId")
         val version = call.getString("version")
         val inputsJson = call.getObject("inputs")
@@ -207,18 +203,15 @@ class CapacitorOnnxPlugin : Plugin() {
             rejectStructured(call, "INFERENCE_ERROR", "Invalid inputs: each entry must include numeric data and positive dims")
             return
         }
-        Log.i("CapacitorOnnxDbg", "run() inputs parsed cb=$cb, launching coroutine")
 
         pluginScope.launch {
             try {
-                Log.i("CapacitorOnnxDbg", "run() coroutine START cb=$cb t=${Thread.currentThread().name}")
                 val startMs = System.currentTimeMillis()
                 val predictions = inferenceService.run(
                     modelId = modelId,
                     version = version,
                     inputs = inputs,
                 )
-                Log.i("CapacitorOnnxDbg", "run() inference DONE cb=$cb latencyMs=${System.currentTimeMillis() - startMs}")
 
                 val outputsJson = JSObject()
                 for ((name, tensor) in predictions) {
@@ -229,11 +222,8 @@ class CapacitorOnnxPlugin : Plugin() {
                     put("outputs", outputsJson)
                     put("latencyMs", System.currentTimeMillis() - startMs)
                 }
-                Log.i("CapacitorOnnxDbg", "run() before call.resolve cb=$cb t=${Thread.currentThread().name}")
                 call.resolve(result)
-                Log.i("CapacitorOnnxDbg", "run() after call.resolve cb=$cb")
             } catch (e: Throwable) {
-                Log.e("CapacitorOnnxDbg", "run() EXCEPTION cb=$cb msg=${e.message}", e)
                 rejectStructured(call, e)
             }
         }
